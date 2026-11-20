@@ -53,6 +53,18 @@ class Bot:
 	var bar_fill: MeshInstance3D
 
 
+class Mate:
+	var node: Soldier
+	var offset := Vector2.ZERO
+	var shoot_cd := 0.0
+	var scan := 0.0
+	var target: Bot = null
+	var crouch := false
+	var spd := 0.0
+	var bob := 0.0
+	var prev := Vector2.ZERO
+
+
 class Pickup:
 	var node: Node3D
 	var pos := Vector2.ZERO
@@ -74,6 +86,8 @@ var pickups: Array[Pickup] = []
 var soldier: Soldier
 var camera: Camera3D
 var sun: DirectionalLight3D
+var fill_light: OmniLight3D
+var mates: Array[Mate] = []
 var ui: GameUI
 var synth: Synth
 
@@ -163,9 +177,10 @@ func _ready() -> void:
 	level.build(START, EXTRACT)
 	obstacles = level.obstacles
 	soldier = Soldier.new()
-	soldier.setup(Color8(86, 96, 74), Color8(70, 74, 60), Color8(64, 72, 54), Color8(78, 86, 66), Color8(52, 56, 44), Color8(214, 178, 146), Color8(38, 40, 42))
+	soldier.setup(Color8(46, 48, 52), Color8(40, 42, 46), Color8(34, 36, 38), Color8(44, 46, 48), Color8(30, 32, 34), Color8(196, 160, 132), Color8(30, 31, 33), Color8(20, 20, 22), Color8(70, 230, 210), Color(0.02, 0.05, 0.07))
 	add_child(soldier)
 	_build_bots()
+	_build_mates()
 	_build_pickups()
 	_build_fx()
 	synth = Synth.new()
@@ -190,28 +205,48 @@ func _ready() -> void:
 # ---------- setup ----------
 
 func _build_env() -> void:
+	# Night op mood: cold moonlight, blue haze, glow on lamps, mild grade.
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color8(138, 148, 140)
+	env.background_color = Color8(18, 24, 34)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color8(176, 190, 196)
-	env.ambient_light_energy = 0.5
+	env.ambient_light_color = Color8(92, 112, 140)
+	env.ambient_light_energy = 0.55
 	env.fog_enabled = true
-	env.fog_light_color = Color8(138, 148, 140)
-	env.fog_density = 0.0085
+	env.fog_light_color = Color8(40, 52, 70)
+	env.fog_light_energy = 1.0
+	env.fog_density = 0.016
+	env.fog_sky_affect = 1.0
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_exposure = 1.1
+	env.glow_enabled = true
+	env.glow_intensity = 0.7
+	env.glow_bloom = 0.05
+	env.glow_hdr_threshold = 0.9
+	env.adjustment_enabled = true
+	env.adjustment_contrast = 1.08
+	env.adjustment_saturation = 0.85
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
 	sun = DirectionalLight3D.new()
-	sun.rotation = Vector3(deg_to_rad(-52), deg_to_rad(32), 0)
-	sun.light_energy = 0.95
-	sun.light_color = Color8(255, 244, 222)
+	sun.rotation = Vector3(deg_to_rad(-48), deg_to_rad(28), 0)
+	sun.light_energy = 0.55
+	sun.light_specular = 1.0
+	sun.light_color = Color8(170, 196, 255)
 	sun.shadow_enabled = true
 	sun.shadow_blur = 1.5
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	sun.directional_shadow_max_distance = 42.0
 	add_child(sun)
+	# Cool fill light that rides with the player for readability.
+	fill_light = OmniLight3D.new()
+	fill_light.light_color = Color8(190, 210, 255)
+	fill_light.light_energy = 0.9
+	fill_light.omni_range = 9.0
+	fill_light.omni_attenuation = 1.4
+	fill_light.shadow_enabled = false
+	add_child(fill_light)
 	camera = Camera3D.new()
 	camera.fov = 52
 	camera.near = 0.1
@@ -233,7 +268,7 @@ func _build_bots() -> void:
 	for s in specs:
 		var b := Bot.new()
 		b.node = Soldier.new()
-		b.node.setup(Color8(150, 82, 52), Color8(106, 58, 40), Color8(120, 66, 44), Color8(90, 52, 36), Color8(60, 40, 30), Color8(226, 201, 168), Color8(42, 36, 32))
+		b.node.setup(Color8(128, 104, 78), Color8(96, 80, 62), Color8(110, 70, 46), Color8(92, 72, 52), Color8(70, 52, 38), Color8(214, 186, 156), Color8(40, 34, 30), Color8(70, 56, 44), Color8(255, 60, 40), Color(0.11, 0.05, 0.02))
 		add_child(b.node)
 		b.home = Vector2(s[0], s[1])
 		b.facing = s[2]
@@ -260,6 +295,94 @@ func _build_bots() -> void:
 		b.bar_fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		b.node.add_child(b.bar_fill)
 		bots.append(b)
+
+
+func _build_mates() -> void:
+	var looks := [[Color8(52, 54, 58), Color8(44, 46, 50)], [Color8(40, 44, 42), Color8(36, 38, 36)]]
+	var offs := [Vector2(-1.6, 1.9), Vector2(1.7, 2.6)]
+	for i in 2:
+		var m := Mate.new()
+		m.node = Soldier.new()
+		var lk: Array = looks[i]
+		m.node.setup(lk[0], lk[1], Color8(34, 36, 38), Color8(46, 48, 50), Color8(30, 32, 34), Color8(186, 150, 122), Color8(30, 31, 33), Color8(22, 22, 24), Color8(70, 230, 210), Color(0.02, 0.05, 0.07))
+		add_child(m.node)
+		m.offset = offs[i]
+		mates.append(m)
+
+
+func _place_mates() -> void:
+	var f := Vector2(sin(yaw), cos(yaw))
+	var r := Vector2(-cos(yaw), sin(yaw))
+	for m in mates:
+		var w := Vector2(pos.x, pos.z) + r * m.offset.x - f * m.offset.y
+		m.node.position = Vector3(w.x, 0, w.y)
+		m.node.rotation.y = yaw
+		m.prev = w
+		m.target = null
+		m.shoot_cd = 1.0
+
+
+## Two AI teammates hold a loose wedge behind you and engage what they can see.
+func _update_mates(dt: float) -> void:
+	var f := Vector2(sin(yaw), cos(yaw))
+	var r := Vector2(-cos(yaw), sin(yaw))
+	for m in mates:
+		var cur := Vector2(m.node.position.x, m.node.position.z)
+		var want := Vector2(pos.x, pos.z) + r * m.offset.x - f * m.offset.y
+		var d := want - cur
+		var dist := d.length()
+		if dist > 24.0 and not _blocked_at(want.x, want.y, 0.4):
+			m.node.position = Vector3(want.x, 0, want.y)
+		elif dist > 0.35:
+			var sp := clampf(dist * 2.4, 0.0, SPRINT * 1.05)
+			var st := d / dist * minf(sp * dt, dist)
+			var c := _collide_xz(cur.x + st.x, cur.y + st.y, 0.34)
+			m.node.position.x = c.x
+			m.node.position.z = c.y
+		m.scan -= dt
+		if m.scan <= 0.0:
+			m.scan = 0.25
+			m.target = null
+			var bd := 18.0
+			for b in bots:
+				if b.state == "down":
+					continue
+				var bdist := Vector2(b.node.position.x - m.node.position.x, b.node.position.z - m.node.position.z).length()
+				if bdist < bd and not _los_blocked(m.node.position.x, m.node.position.z, b.node.position.x, b.node.position.z):
+					bd = bdist
+					m.target = b
+		if m.target != null and m.target.state == "down":
+			m.target = null
+		var face := yaw
+		if m.target != null:
+			face = atan2(m.target.node.position.x - m.node.position.x, m.target.node.position.z - m.node.position.z)
+		elif dist > 1.0:
+			face = atan2(d.x, d.y)
+		m.node.rotation.y = _damp_angle(m.node.rotation.y, face, 9.0, dt)
+		m.crouch = dist < 0.8 and _near_low_cover(m.node.position.x, m.node.position.z, 0.95) != null
+		m.shoot_cd -= dt
+		if m.target != null and m.shoot_cd <= 0.0 and absf(_wrap(m.node.rotation.y - face)) < 0.25:
+			m.shoot_cd = randf_range(0.55, 0.95)
+			var tb := m.target
+			var aim := Vector3(tb.node.position.x, 0.6 if tb.crouch else 1.1, tb.node.position.z)
+			var hit := randf() < 0.4
+			if not hit:
+				aim += Vector3(randf_range(-0.8, 0.8), randf_range(-0.3, 0.5), randf_range(-0.8, 0.8))
+			_spawn_tracer(m.node.muzzle.global_position, aim)
+			_spawn_spark(aim)
+			var pd := Vector2(m.node.position.x - pos.x, m.node.position.z - pos.z).length()
+			synth.play("carbine", 0.45 / (1.0 + pd * 0.1))
+			if hit:
+				_hurt_bot(tb)
+
+
+func _pose_mates(dt: float) -> void:
+	for m in mates:
+		var p2 := Vector2(m.node.position.x, m.node.position.z)
+		m.spd = (p2 - m.prev).length() / maxf(dt, 1e-4)
+		m.prev = p2
+		m.bob += m.spd * dt * 1.7
+		m.node.pose(dt, m.spd, m.bob, 0.0, 0.0, m.crouch, -1.0, m.target != null, false, -1.0)
 
 
 func _flat_mat(c: Color) -> StandardMaterial3D:
@@ -570,6 +693,7 @@ func _reset_mission() -> void:
 			p.wait = 0.0
 			p.node.visible = true
 	soldier.k_down = 0.0
+	_place_mates()
 	cam_pos = _camera_target(0.0)
 
 
@@ -985,7 +1109,7 @@ func _world_hit(o: Vector3, d: Vector3, max_d: float, tall_only := false, min_t 
 	var iy := 1.0 / (d.y if absf(d.y) > 1e-8 else 1e-8)
 	var iz := 1.0 / (d.z if absf(d.z) > 1e-8 else 1e-8)
 	for ob in obstacles:
-		if tall_only and ob.h < 1.2:
+		if not ob.blocks_ray or (tall_only and ob.h < 1.2):
 			continue
 		var t1 := (ob.min_x - o.x) * ix
 		var t2 := (ob.max_x - o.x) * ix
@@ -1837,7 +1961,7 @@ func _update_camera(dt: float) -> void:
 	camera.rotation = Vector3(-atan2(d.y, maxf(0.15, hy)) + kick_p * 0.25, atan2(d.x, d.z), 0)
 	var fov := (55.0 if _sprinting(_wish()) else 52.0) + 4.0 * s
 	camera.fov = _damp(camera.fov, fov, 6.0, dt)
-	sun.global_position = Vector3(pos.x, 0, pos.z)
+	fill_light.position = Vector3(pos.x, 3.2, pos.z)
 
 
 # ---------- frame ----------
@@ -1850,6 +1974,7 @@ func _process(delta: float) -> void:
 		_update_cover()
 		_update_shoot(dt)
 		_update_bots(dt)
+		_update_mates(dt)
 		_update_pickups(dt)
 		var ex := Vector2(pos.x - EXTRACT.x, pos.z - EXTRACT.z)
 		if hp > 0.0 and ex.length() <= EXTRACT_R:
@@ -1859,6 +1984,7 @@ func _process(delta: float) -> void:
 	elif playing and not paused:
 		_update_bots(dt)
 	_pose_bots(dt)
+	_pose_mates(dt)
 	_update_player_visual(dt)
 	_update_camera(dt)
 	_update_fx(dt)

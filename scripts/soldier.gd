@@ -38,6 +38,8 @@ var part_helmet: Node3D
 var part_top: Node3D
 var part_bottom: Node3D
 var mats: Array[StandardMaterial3D] = []
+var base_emission := Color(0, 0, 0)
+var glow_mats: Array[StandardMaterial3D] = []
 
 var k_crouch := 0.0
 var k_aim := 0.0
@@ -99,7 +101,7 @@ func _mat(c: Color, rough := 0.85, metal := 0.0) -> StandardMaterial3D:
 	m.roughness = rough
 	m.metallic = metal
 	m.emission_enabled = true
-	m.emission = Color(0, 0, 0)
+	m.emission = base_emission
 	mats.append(m)
 	return m
 
@@ -117,9 +119,18 @@ func _mi(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3, rot := Vector3
 	return mi
 
 
-func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, skin: Color, gun_col: Color) -> void:
+## face: balaclava color. visor: eye-protection glow color (black = no glow).
+func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, skin: Color, gun_col: Color, face := Color(0.09, 0.09, 0.1), visor := Color(0, 0, 0), emission := Color(0, 0, 0)) -> void:
+	base_emission = emission
 	var m_top := _mat(top)
+	m_top.albedo_color = Color.WHITE
+	m_top.albedo_texture = camo_texture(top)
+	m_top.uv1_scale = Vector3(2, 2, 1)
 	var m_bot := _mat(bottom)
+	m_bot.albedo_color = Color.WHITE
+	m_bot.albedo_texture = camo_texture(bottom)
+	m_bot.uv1_scale = Vector3(2, 3, 1)
+	var m_face := _mat(face, 0.95)
 	var m_vest := _mat(vest, 0.9)
 	var m_helm := _mat(helmet, 0.6)
 	var m_gear := _mat(gear, 0.9)
@@ -168,7 +179,8 @@ func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, s
 	_mi(part_top, _cap(0.13, 0.5), m_top, Vector3(0, 0.24, 0), Vector3.ZERO, Vector3(1.3, 1.0, 0.85))
 	_mi(part_top, _box(0.37, 0.3, 0.27), m_vest, Vector3(0, 0.3, 0.005))
 	for px in [-0.11, 0.0, 0.11]:
-		_mi(part_top, _box(0.085, 0.11, 0.06), m_gear, Vector3(px, 0.22, 0.165), Vector3.ZERO, Vector3.ONE, false)
+		_mi(part_top, _box(0.075, 0.15, 0.055), m_gear, Vector3(px, 0.24, 0.165), Vector3.ZERO, Vector3.ONE, false)
+		_mi(part_top, _box(0.077, 0.03, 0.06), m_dark, Vector3(px, 0.32, 0.165), Vector3.ZERO, Vector3.ONE, false)
 	_mi(part_top, _box(0.27, 0.24, 0.09), m_gear, Vector3(0, 0.31, -0.175), Vector3.ZERO, Vector3.ONE, false)
 	_mi(part_top, _sph(0.07), m_top, SHOULDER_L)
 	_mi(part_top, _sph(0.07), m_top, SHOULDER_R)
@@ -176,16 +188,29 @@ func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, s
 	neck = Node3D.new()
 	neck.position = Vector3(0, 0.47, 0)
 	spine.add_child(neck)
-	_mi(neck, _cap(0.048, 0.13), m_skin, Vector3(0, 0.03, 0))
+	_mi(neck, _cap(0.048, 0.13), m_face, Vector3(0, 0.03, 0))
 	head = Node3D.new()
 	head.position = Vector3(0, 0.09, 0)
 	neck.add_child(head)
-	_mi(head, _sph(0.1), m_skin, Vector3(0, 0.1, 0.012), Vector3.ZERO, Vector3(0.9, 1.1, 1.0))
+	_mi(head, _sph(0.1), m_face, Vector3(0, 0.1, 0.012), Vector3.ZERO, Vector3(0.9, 1.1, 1.0))
+	_mi(head, _box(0.12, 0.03, 0.03), m_skin, Vector3(0, 0.122, 0.1), Vector3.ZERO, Vector3.ONE, false)
 	part_helmet = Node3D.new()
 	head.add_child(part_helmet)
 	_mi(part_helmet, _sph(0.122), m_helm, Vector3(0, 0.15, -0.005), Vector3.ZERO, Vector3(1.0, 0.8, 1.06))
 	_mi(part_helmet, _box(0.21, 0.025, 0.05), m_helm, Vector3(0, 0.135, 0.1), Vector3.ZERO, Vector3.ONE, false)
-	_mi(part_helmet, _box(0.15, 0.036, 0.02), m_dark, Vector3(0, 0.1, 0.112), Vector3.ZERO, Vector3.ONE, false)
+	var m_visor := m_dark
+	if visor.v > 0.01:
+		m_visor = _mat(Color(0.05, 0.05, 0.05), 0.3)
+		m_visor.emission = visor
+		m_visor.emission_energy_multiplier = 2.2
+		glow_mats.append(m_visor)
+	_mi(part_helmet, _box(0.15, 0.036, 0.02), m_visor, Vector3(0, 0.122, 0.118), Vector3.ZERO, Vector3.ONE, false)
+	# High-cut shroud + flipped-up night-vision tubes.
+	_mi(part_helmet, _box(0.06, 0.04, 0.03), m_dark, Vector3(0, 0.19, 0.115), Vector3.ZERO, Vector3.ONE, false)
+	_mi(part_helmet, _cyl(0.017, 0.07), m_dark, Vector3(0.026, 0.225, 0.118), Vector3(-0.5, 0, 0), Vector3.ONE, false)
+	_mi(part_helmet, _cyl(0.017, 0.07), m_dark, Vector3(-0.026, 0.225, 0.118), Vector3(-0.5, 0, 0), Vector3.ONE, false)
+	_mi(part_helmet, _box(0.05, 0.012, 0.16), m_gear, Vector3(0.09, 0.2, 0), Vector3(0, 0, -0.5), Vector3.ONE, false)
+	_mi(part_helmet, _box(0.05, 0.012, 0.16), m_gear, Vector3(-0.09, 0.2, 0), Vector3(0, 0, 0.5), Vector3.ONE, false)
 	_mi(part_helmet, _box(0.2, 0.1, 0.06), m_helm, Vector3(0, 0.085, -0.085), Vector3(0.25, 0, 0), Vector3.ONE, false)
 	_mi(part_helmet, _box(0.17, 0.08, 0.05), m_gear, Vector3(0, 0.02, -0.07), Vector3.ZERO, Vector3.ONE, false)
 	_mi(part_helmet, _box(0.04, 0.07, 0.075), m_gear, Vector3(0.112, 0.09, 0), Vector3.ZERO, Vector3.ONE, false)
@@ -229,9 +254,40 @@ func _marker(parent: Node3D, p: Vector3) -> Node3D:
 
 
 func set_flash(f: float) -> void:
-	var c := Color(0.45, 0.32, 0.16) * clampf(f / 0.12, 0.0, 1.0)
+	var c := base_emission + Color(0.45, 0.32, 0.16) * clampf(f / 0.12, 0.0, 1.0)
 	for m in mats:
-		m.emission = c
+		if not glow_mats.has(m):
+			m.emission = c
+
+
+static var _camo := {}
+
+
+## Procedural blotch camo in shades of the base color (cached per color).
+static func camo_texture(base: Color) -> ImageTexture:
+	var key := base.to_html()
+	if _camo.has(key):
+		return _camo[key]
+	var s := 64
+	var img := Image.create(s, s, false, Image.FORMAT_RGB8)
+	img.fill(base)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 31
+	var shades := [base.darkened(0.35), base.lightened(0.12), base.darkened(0.15)]
+	for i in 46:
+		var c: Color = shades[i % 3]
+		var cx := rng.randi_range(0, s - 1)
+		var cy := rng.randi_range(0, s - 1)
+		var rx := rng.randi_range(3, 8)
+		var ry := rng.randi_range(2, 5)
+		for y in range(-ry, ry + 1):
+			for x in range(-rx, rx + 1):
+				if float(x * x) / (rx * rx) + float(y * y) / (ry * ry) <= 1.0:
+					img.set_pixel(posmod(cx + x, s), posmod(cy + y, s), c)
+	img.generate_mipmaps()
+	var t := ImageTexture.create_from_image(img)
+	_camo[key] = t
+	return t
 
 
 static func _ease(cur: float, target: float, lam: float, dt: float) -> float:

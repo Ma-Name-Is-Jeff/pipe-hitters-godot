@@ -54,7 +54,7 @@ func _box_geo(x: float, y: float, z: float, w: float, h: float, d: float, base: 
 	_quad(c - Vector3(0, 0, hz), Vector3(-hx, 0, 0), Vector3(0, hy, 0), Vector3.FORWARD, col)
 
 
-func add_solid(x: float, y: float, z: float, w: float, h: float, d: float, col: Color, vaultable := false, deco := false) -> void:
+func add_solid(x: float, y: float, z: float, w: float, h: float, d: float, col: Color, vaultable := false, deco := false, blocks_ray := true) -> void:
 	_box_geo(x, y, z, w, h, d, col)
 	if deco:
 		return
@@ -65,6 +65,7 @@ func add_solid(x: float, y: float, z: float, w: float, h: float, d: float, col: 
 	o.max_z = z + d * 0.5
 	o.h = h
 	o.vaultable = vaultable
+	o.blocks_ray = blocks_ray
 	obstacles.append(o)
 
 
@@ -210,11 +211,16 @@ func build(start: Vector3, extract: Vector3) -> void:
 	var ground_size := WORLD * 2.0 + 16.0
 	var gm := StandardMaterial3D.new()
 	gm.albedo_texture = grass_texture()
-	gm.albedo_color = Color8(180, 192, 168)
-	gm.roughness = 1.0
-	gm.uv1_scale = Vector3(ground_size / 4.5, ground_size / 4.5, 1)
+	gm.albedo_color = Color8(120, 138, 128)
+	gm.roughness = 0.55
+	gm.metallic_specular = 0.7
+	var tiles := 6
+	var ts := ground_size / tiles
+	gm.uv1_scale = Vector3(ts / 4.5, ts / 4.5, 1)
 	gm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
-	_ground_plane(0, 0, ground_size, ground_size, 0, gm, 0)
+	for gx in tiles:
+		for gz in tiles:
+			_ground_plane(-ground_size * 0.5 + ts * (gx + 0.5), -ground_size * 0.5 + ts * (gz + 0.5), ts, ts, 0, gm, 0)
 
 	var dirt := dirt_texture()
 	var paths := [[0.0, 0.0, 11.0, WORLD * 2.0 - 8.0, 0.0], [0.0, 8.0, 86.0, 8.0, 0.0], [-22.0, -30.0, 36.0, 7.0, 0.15], [20.0, -40.0, 32.0, 7.0, -0.2]]
@@ -222,8 +228,9 @@ func build(start: Vector3, extract: Vector3) -> void:
 	for p in paths:
 		var dm := StandardMaterial3D.new()
 		dm.albedo_texture = dirt
-		dm.albedo_color = Color8(216, 200, 168)
-		dm.roughness = 1.0
+		dm.albedo_color = Color8(92, 88, 84)
+		dm.roughness = 0.2
+		dm.metallic_specular = 0.9
 		var w: float = p[2]
 		var d: float = p[3]
 		dm.uv1_scale = Vector3(w / 4.0, d / 4.0, 1)
@@ -232,11 +239,13 @@ func build(start: Vector3, extract: Vector3) -> void:
 		i += 1
 	var pad := StandardMaterial3D.new()
 	pad.albedo_texture = dirt
-	pad.albedo_color = Color8(200, 192, 168)
+	pad.albedo_color = Color8(84, 82, 78)
+	pad.roughness = 0.3
 	_ground_plane(start.x, start.z, 6, 5.5, 0, pad, 0.024)
 	var ex := StandardMaterial3D.new()
 	ex.albedo_texture = dirt
-	ex.albedo_color = Color8(154, 170, 136)
+	ex.albedo_color = Color8(70, 84, 72)
+	ex.roughness = 0.3
 	_ground_plane(extract.x, extract.z, 8, 7, 0, ex, 0.024)
 
 	var W := WORLD
@@ -289,6 +298,7 @@ func build(start: Vector3, extract: Vector3) -> void:
 	add_solid(5.2, 0, -100.2, 1.2, 3.6, 1.2, peri)
 	add_solid(0, 3.3, -100.2, 11, 0.32, 0.65, mark, false, true)
 
+	_build_mood()
 	var mesh := _st.commit()
 	var lm := StandardMaterial3D.new()
 	lm.vertex_color_use_as_albedo = true
@@ -342,3 +352,210 @@ func build(start: Vector3, extract: Vector3) -> void:
 	lbl.outline_size = 18
 	lbl.position = Vector3(extract.x, 4.6, extract.z)
 	root.add_child(lbl)
+
+
+# ---------- night mood: fences, catwalks, floodlights, practical lights, puddles ----------
+
+var _beam_mat: StandardMaterial3D
+var _pool_cold: StandardMaterial3D
+var _pool_warm: StandardMaterial3D
+var _fence_mat: StandardMaterial3D
+
+
+static func _grad(radial: bool, a: Color, b: Color) -> GradientTexture2D:
+	var g := Gradient.new()
+	g.set_color(0, a)
+	g.set_color(1, b)
+	var t := GradientTexture2D.new()
+	t.gradient = g
+	t.width = 64
+	t.height = 64
+	if radial:
+		t.fill = GradientTexture2D.FILL_RADIAL
+		t.fill_from = Vector2(0.5, 0.5)
+		t.fill_to = Vector2(0.5, 0.0)
+	else:
+		t.fill_from = Vector2(0, 0)
+		t.fill_to = Vector2(0, 1)
+	return t
+
+
+static func _additive(tex: Texture2D, col: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.albedo_texture = tex
+	m.albedo_color = col
+	m.disable_receive_shadows = true
+	return m
+
+
+func _fx(mesh: Mesh, mat: Material, pos: Vector3, rot := Vector3.ZERO) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = pos
+	mi.rotation = rot
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(mi)
+	return mi
+
+
+func _pool(x: float, z: float, r: float, mat: Material) -> void:
+	var q := QuadMesh.new()
+	q.size = Vector2(r * 2.0, r * 2.0)
+	_fx(q, mat, Vector3(x, 0.035, z), Vector3(-PI * 0.5, 0, 0))
+
+
+## Floodlight tower: pole, lamp head, fake volumetric beam and a light pool.
+func flood(x: float, z: float, tx: float, tz: float) -> void:
+	var h := 6.2
+	add_solid(x, 0, z, 0.22, h, 0.22, Color8(58, 62, 66))
+	add_solid(x, h - 0.15, z, 0.7, 0.3, 0.5, Color8(40, 42, 46), false, true)
+	var lamp := BoxMesh.new()
+	lamp.size = Vector3(0.6, 0.12, 0.4)
+	var lm := StandardMaterial3D.new()
+	lm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	lm.albedo_color = Color(0.85, 0.93, 1.0)
+	_fx(lamp, lm, Vector3(x, h - 0.24, z))
+	var top := Vector3(x, h - 0.3, z)
+	var bot := Vector3(tx, 0.0, tz)
+	var d := bot - top
+	var l := d.length()
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.3
+	cone.bottom_radius = 2.8
+	cone.height = l
+	cone.radial_segments = 16
+	cone.rings = 1
+	cone.cap_top = false
+	cone.cap_bottom = false
+	var mi := _fx(cone, _beam_mat, (top + bot) * 0.5)
+	var yax := -d / l
+	var xax := yax.cross(Vector3.FORWARD)
+	if xax.length() < 0.05:
+		xax = yax.cross(Vector3.RIGHT)
+	xax = xax.normalized()
+	mi.basis = Basis(xax, yax, xax.cross(yax))
+	_pool(tx, tz, 5.2, _pool_cold)
+
+
+## Warm practical light: small lamp box + warm pool.
+func practical(x: float, z: float, y := 2.5) -> void:
+	var b := BoxMesh.new()
+	b.size = Vector3(0.28, 0.16, 0.28)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.albedo_color = Color(1.0, 0.72, 0.38)
+	_fx(b, m, Vector3(x, y, z))
+	var g := QuadMesh.new()
+	g.size = Vector2(1.6, 1.6)
+	var gm := _additive(_grad(true, Color(1, 0.7, 0.35, 0.55), Color(1, 0.6, 0.3, 0.0)), Color.WHITE)
+	gm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_fx(g, gm, Vector3(x, y, z))
+	_pool(x, z, 3.6, _pool_warm)
+
+
+## Chain-link fence run along X or Z. Blocks movement, not bullets or sight.
+func fence(x0: float, z0: float, x1: float, z1: float) -> void:
+	var len := Vector2(x1 - x0, z1 - z0).length()
+	var along_x := absf(x1 - x0) > absf(z1 - z0)
+	var cx := (x0 + x1) * 0.5
+	var cz := (z0 + z1) * 0.5
+	var h := 2.3
+	var post := Color8(70, 74, 78)
+	var n := int(ceil(len / 3.0))
+	for i in n + 1:
+		var u := float(i) / n
+		add_solid(lerpf(x0, x1, u), 0, lerpf(z0, z1, u), 0.1, h, 0.1, post, false, true)
+	add_solid(cx, h - 0.05, cz, len if along_x else 0.06, 0.06, 0.06 if along_x else len, post, false, true)
+	var o := Obstacle.new()
+	o.min_x = minf(x0, x1) - 0.06
+	o.max_x = maxf(x0, x1) + 0.06
+	o.min_z = minf(z0, z1) - 0.06
+	o.max_z = maxf(z0, z1) + 0.06
+	o.h = h
+	o.blocks_ray = false
+	obstacles.append(o)
+	var q := QuadMesh.new()
+	q.size = Vector2(len, h)
+	var mi := _fx(q, _fence_mat, Vector3(cx, h * 0.5, cz), Vector3(0, 0.0 if along_x else PI * 0.5, 0))
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+
+
+static func chain_texture() -> ImageTexture:
+	var s := 32
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	for i in s:
+		for w in 2:
+			img.set_pixel((i + w) % s, i, Color(0.62, 0.66, 0.7, 1))
+			img.set_pixel((s - 1 - i + w) % s, i, Color(0.62, 0.66, 0.7, 1))
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
+
+## Overhead catwalk between two points (deco, no collision except end posts).
+func catwalk(x0: float, x1: float, z: float, y := 3.1) -> void:
+	var len := absf(x1 - x0)
+	var cx := (x0 + x1) * 0.5
+	var steel := Color8(64, 68, 72)
+	add_solid(cx, y, z, len, 0.12, 1.4, Color8(52, 55, 58), false, true)
+	add_solid(cx, y + 1.0, z - 0.68, len, 0.05, 0.05, steel, false, true)
+	add_solid(cx, y + 1.0, z + 0.68, len, 0.05, 0.05, steel, false, true)
+	add_solid(cx, y + 0.5, z - 0.68, len, 0.04, 0.04, steel, false, true)
+	add_solid(cx, y + 0.5, z + 0.68, len, 0.04, 0.04, steel, false, true)
+	var n := int(ceil(len / 2.5))
+	for i in n + 1:
+		var px := lerpf(x0, x1, float(i) / n)
+		add_solid(px, y, z - 0.68, 0.05, 1.0, 0.05, steel, false, true)
+		add_solid(px, y, z + 0.68, 0.05, 1.0, 0.05, steel, false, true)
+	for px in [x0 + 0.4, x1 - 0.4]:
+		add_solid(px, 0, z, 0.26, y, 0.26, steel)
+
+
+func puddle(x: float, z: float, w: float, d: float) -> void:
+	var q := QuadMesh.new()
+	q.size = Vector2(w, d)
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.03, 0.04, 0.05)
+	m.roughness = 0.04
+	m.metallic = 0.6
+	m.metallic_specular = 1.0
+	_fx(q, m, Vector3(x, 0.03, z), Vector3(-PI * 0.5, 0, 0))
+
+
+func _build_mood() -> void:
+	_beam_mat = _additive(_grad(false, Color(0.75, 0.86, 1.0, 0.085), Color(0.6, 0.75, 1.0, 0.0)), Color.WHITE)
+	_pool_cold = _additive(_grad(true, Color(0.62, 0.74, 0.95, 0.42), Color(0.5, 0.6, 0.9, 0.0)), Color.WHITE)
+	_pool_warm = _additive(_grad(true, Color(1.0, 0.62, 0.3, 0.38), Color(1.0, 0.5, 0.2, 0.0)), Color.WHITE)
+	_fence_mat = StandardMaterial3D.new()
+	_fence_mat.albedo_texture = chain_texture()
+	_fence_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	_fence_mat.alpha_scissor_threshold = 0.5
+	_fence_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_fence_mat.metallic = 0.5
+	_fence_mat.roughness = 0.4
+	_fence_mat.uv1_scale = Vector3(8, 2, 1)
+	_fence_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+
+	for f in [[7.5, 80, 1.5, 74], [-7.5, 57, -1.5, 52], [7.5, 36, 1.5, 32], [-7.5, 14, -1.5, 10],
+			[7.5, -6, 1.5, -10], [-7.5, -27, -1.5, -32], [7.5, -46, 1.5, -50], [-7.5, -66, -1.5, -72], [7.5, -84, 1.5, -86]]:
+		flood(f[0], f[1], f[2], f[3])
+	for pr in [[-10.8, 72.5], [10.8, 71.5], [-24.6, 22.0], [23.6, 15.0], [-22.6, -51.0], [25.6, -58.0], [-5.2, -98.9], [5.2, -98.9]]:
+		practical(pr[0], pr[1])
+
+	fence(20, 40, 60, 40)
+	fence(-60, -20, -20, -20)
+	fence(-30, -76, -12, -76)
+	fence(12, -76, 30, -76)
+	fence(60, 36, 60, 2)
+	catwalk(-10.8, 10.8, 64.0)
+	catwalk(-22.6, 25.6, -55.0)
+	catwalk(-24.6, 23.6, 12.0, 3.0)
+
+	for pd in [[2, 66, 3.2, 1.6], [-3, 41, 2.4, 1.4], [3, 2, 3.6, 1.8], [-2, -36, 2.8, 1.3], [1, -58, 3.0, 2.0], [-2, -80, 2.6, 1.4], [14, 20, 2.2, 1.2], [-26, -26, 3.0, 1.5]]:
+		puddle(pd[0], pd[1], pd[2], pd[3])
