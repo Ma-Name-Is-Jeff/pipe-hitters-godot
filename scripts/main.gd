@@ -48,6 +48,28 @@ class Bot:
 	var bar_bg: MeshInstance3D
 	var bar_fill: MeshInstance3D
 	var label := "Rook"
+	# v1n combat state
+	var see := -1.0                # distance to the player when in line of sight, else -1 (set each frame)
+	var phase := ""                # "", go, hide, peek, fire, back, open
+	var phase_t := 0.0
+	var cover_pt := Vector2.ZERO
+	var cover_ob: Obstacle = null
+	var peek_pt := Vector2.ZERO
+	var react := -1.0              # reaction delay left before the first shot after spotting the player
+	var seen_prev := false
+	var burst_left := 0
+	var shot_t := 0.0
+	var pause_t := 0.0
+	var strafe_dir := 1.0
+	var strafe_t := 0.0
+	var strafing := false
+	var repos_t := 0.0
+	var stuck_t := 0.0
+	var stuck_from := Vector2.ZERO
+	var hurt_t := 0.0
+	var lost_t := 0.0
+	var rounds := 0                # extra bursts left on this peek
+	var bad := {}                  # Obstacle -> expiry (s): cover that did not work out recently
 
 
 class Mate:
@@ -83,6 +105,7 @@ var arena_root: Node3D
 var arena_mode := false
 var compound_bots: Array[Bot] = []
 var arena_bots: Array[Bot] = []
+var enemy_shots := 0  # v1n: shots fired by enemies (tests / stats)
 var tune_open := false
 var _save_wait := -1.0
 var obstacles: Array[Obstacle] = []
@@ -657,6 +680,10 @@ func _load_settings() -> void:
 		# value; only a camera still sitting on the old default follows the new one.
 		if not ["v1j", "v1k", "v1l", "v1m"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["cam_dist"]) - 14.5) < 0.01:
 			settings["cam_dist"] = 11.2
+		# v1n: enemies got harder. A saved accuracy still on the old default (50) follows the new default;
+		# custom values are kept and the new enemy keys simply start at their defaults.
+		if not ["v1n"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["enemy_acc"]) - 50.0) < 0.01:
+			settings["enemy_acc"] = TuneDefs.defaults()["enemy_acc"]
 		settings["tune_ver"] = TuneDefs.VERSION
 	for it in TuneDefs.all_items():
 		settings[it["key"]] = TuneDefs.clamp_value(it["key"], float(settings[it["key"]]))
@@ -1041,6 +1068,15 @@ func _respawn_bot(b: Bot, at: Vector2) -> void:
 	b.alert = 0.0
 	b.wp = 0
 	b.shoot_cd = 0.6 + randf() * 0.8
+	b.phase = ""
+	b.cover_ob = null
+	b.bad = {}
+	b.burst_left = 0
+	b.shot_t = 0.0
+	b.pause_t = 0.0
+	b.hurt_t = 0.0
+	b.react = -1.0
+	b.seen_prev = false
 	b.node.position = Vector3(at.x, 0, at.y)
 	b.node.rotation = Vector3(0, b.facing, 0)
 	b.prev = at
@@ -2150,6 +2186,7 @@ func _hurt_bot(b: Bot) -> void:
 	synth.play("hit", 0.7)
 	b.alert = maxf(b.alert, 3.0)
 	b.last_seen = Vector2(pos.x, pos.z)
+	b.hurt_t = 0.5
 	if b.hp <= 0:
 		b.state = "down"
 		b.t = 0.0
@@ -2328,32 +2365,316 @@ func _move_bot(b: Bot, tx: float, tz: float, speed: float, dt: float) -> bool:
 	return false
 
 
-func _cover_point(b: Bot) -> Variant:
-	var best: Variant = null
-	var bd := 12.0
+## ---- v1n enemy combat: cover that really blocks sight, peek / burst / duck, strafing, reposition ----
+
+const BOT_COVER_MIN_H := 1.2        # only obstacles that block sight (same rule as _los_blocked) count as cover
+const BOT_RUN := 3.8
+const BOT_PEEK := 3.0
+const BOT_STRAFE := 2.5
+
+
+func _bot_free(x: float, z: float) -> bool:
+	var lim := (Level.ARENA_HALF - 1.2) if arena_mode else (Level.WORLD - 3.0)
+	if absf(x) > lim or absf(z) > lim:
+		return false
+	return not _blocked_at(x, z, RADIUS * 1.1)
+
+
+func _seg_clear(ax: float, az: float, bx: float, bz: float) -> bool:
+	var d := Vector2(bx - ax, bz - az)
+	var l := d.length()
+	var n := maxi(1, int(ceil(l / 0.35)))
+	for i in range(1, n + 1):
+		var u := float(i) / n
+		if _blocked_at(ax + d.x * u, az + d.y * u, RADIUS * 1.05):
+			return false
+	return true
+
+
+## Hidden = sight line to the player blocked from the point and from a spot 0.3 m either side of it.
+func _hidden_from_player(x: float, z: float) -> bool:
+	if not _los_blocked(x, z, pos.x, pos.z):
+		return false
+	var dx := pos.x - x
+	var dz := pos.z - z
+	var l := maxf(sqrt(dx * dx + dz * dz), 1e-4)
+	var px := -dz / l * 0.3
+	var pz := dx / l * 0.3
+	return _los_blocked(x + px, z + pz, pos.x, pos.z) and _los_blocked(x - px, z - pz, pos.x, pos.z)
+
+
+## Best tall prop to hide behind: the spot on its far side (from the player) that really blocks sight,
+## close to the bot, reachable in a straight line, not recently abandoned. Returns {} if none.
+func _find_cover(b: Bot, avoid: Obstacle) -> Dictionary:
+	var best := {}
+	var bs := 1e9
+	var bx := b.node.position.x
+	var bz := b.node.position.z
+	var now := _now()
+	var dirs := [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1), Vector2(0.707, 0.707), Vector2(-0.707, 0.707), Vector2(0.707, -0.707), Vector2(-0.707, -0.707)]
 	for o in obstacles:
-		if not _low_cover(o):
+		if o.h < BOT_COVER_MIN_H or not o.blocks_ray:
+			continue
+		var w := o.max_x - o.min_x
+		var d := o.max_z - o.min_z
+		if maxf(w, d) > 10.0 or maxf(w, d) < 0.6:
 			continue
 		var mx := (o.min_x + o.max_x) * 0.5
 		var mz := (o.min_z + o.max_z) * 0.5
-		var dist := Vector2(b.node.position.x - mx, b.node.position.z - mz).length()
-		if dist > 9.0 or dist < 0.2:
+		if Vector2(bx - mx, bz - mz).length() > 18.0:
 			continue
-		var away := Vector2(mx - pos.x, mz - pos.z)
-		var n := maxf(away.length(), 1e-4)
-		var px := mx + away.x / n * ((o.max_x - o.min_x) * 0.5 + 0.6)
-		var pz := mz + away.y / n * ((o.max_z - o.min_z) * 0.5 + 0.6)
-		if _blocked_at(px, pz, 0.35):
+		if b.bad.has(o) and float(b.bad[o]) > now:
 			continue
-		if dist < bd:
-			bd = dist
-			best = Vector2(px, pz)
+		for dv in dirs:
+			var dd: Vector2 = dv
+			var tx := (w * 0.5) / maxf(absf(dd.x), 1e-4)
+			var tz := (d * 0.5) / maxf(absf(dd.y), 1e-4)
+			var t := minf(tx, tz) + 0.62
+			var px := mx + dd.x * t
+			var pz := mz + dd.y * t
+			if not _bot_free(px, pz):
+				continue
+			var dp := Vector2(px - pos.x, pz - pos.z).length()
+			if dp < 2.5 or dp > 16.0:
+				continue
+			if not _hidden_from_player(px, pz):
+				continue
+			if not _seg_clear(bx, bz, px, pz):
+				continue
+			var s := Vector2(px - bx, pz - bz).length() + 0.6 * maxf(0.0, dp - 11.0) + (6.0 if o == avoid else 0.0) + randf() * 0.6
+			if s < bs:
+				bs = s
+				best = {"pt": Vector2(px, pz), "ob": o}
 	return best
 
 
+## From the hide spot, the nearest spot to the side where the player is in sight again.
+func _find_peek(b: Bot) -> Variant:
+	var h := b.cover_pt
+	var dx := pos.x - h.x
+	var dz := pos.z - h.y
+	var l := maxf(sqrt(dx * dx + dz * dz), 1e-4)
+	var perp := Vector2(-dz / l, dx / l)
+	var sides := [1.0, -1.0] if randf() < 0.5 else [-1.0, 1.0]
+	var best: Variant = null
+	var bd := 1e9
+	for s in sides:
+		for dist in [0.5, 0.8, 1.1, 1.5, 2.0, 2.6, 3.2]:
+			var q := h + perp * float(s) * float(dist)
+			if not _bot_free(q.x, q.y):
+				break
+			if not _seg_clear(h.x, h.y, q.x, q.y):
+				break
+			if not _los_blocked(q.x, q.y, pos.x, pos.z):
+				if float(dist) < bd:
+					bd = float(dist)
+					best = q
+				break
+	return best
+
+
+func _step_bot(b: Bot, tx: float, tz: float, speed: float, dt: float, face: float) -> bool:
+	var dx := tx - b.node.position.x
+	var dz := tz - b.node.position.z
+	var dist := sqrt(dx * dx + dz * dz)
+	if dist < 0.18:
+		return true
+	var st := minf(speed * dt, dist)
+	var h := _collide_xz(b.node.position.x + dx / dist * st, b.node.position.z + dz / dist * st, RADIUS)
+	b.node.position.x = h.x
+	b.node.position.z = h.y
+	b.node.rotation.y = _damp_angle(b.node.rotation.y, face, 9.0, dt)
+	return false
+
+
+## Side-step perpendicular to the player. Returns false if something blocked it.
+func _strafe_bot(b: Bot, dt: float, want: float) -> bool:
+	var dx := pos.x - b.node.position.x
+	var dz := pos.z - b.node.position.z
+	var l := maxf(sqrt(dx * dx + dz * dz), 1e-4)
+	var sx := -dz / l * b.strafe_dir
+	var sz := dx / l * b.strafe_dir
+	var nx := b.node.position.x + sx * BOT_STRAFE * dt
+	var nz := b.node.position.z + sz * BOT_STRAFE * dt
+	var h := _collide_xz(nx, nz, RADIUS)
+	var moved := Vector2(h.x - b.node.position.x, h.y - b.node.position.z).length()
+	b.node.position.x = h.x
+	b.node.position.z = h.y
+	b.node.rotation.y = _damp_angle(b.node.rotation.y, want, 10.0, dt)
+	b.strafing = true
+	return moved > BOT_STRAFE * dt * 0.5
+
+
+func _bot_shoot_gate(b: Bot, dt: float, allowed: Array, cover_mode: bool) -> void:
+	# Reaction delay first, then a burst at the tuned interval; bursts repeat after a short pause (open ground)
+	# or end the peek (cover mode).
+	b.shot_t -= dt
+	if b.react > 0.0:
+		b.react -= dt
+		return
+	if b.burst_left <= 0:
+		if cover_mode and b.rounds <= 0:
+			return
+		b.pause_t -= dt
+		if b.pause_t > 0.0:
+			return
+		if cover_mode:
+			b.rounds -= 1
+		b.burst_left = maxi(1, int(round(_t("enemy_burst"))))
+		b.shot_t = 0.0
+	if b.shot_t > 0.0:
+		return
+	if _game_active() and allowed.has(b) and b.see >= 0.0:
+		_enemy_fire(b)
+		b.burst_left -= 1
+		var gap := _t("enemy_fire_ms") / 1000.0 * randf_range(0.9, 1.15)
+		b.shot_t = gap
+		if b.burst_left <= 0:
+			# single shots follow the interval; real bursts rest a moment before the next one
+			b.pause_t = gap if int(round(_t("enemy_burst"))) <= 1 else (randf_range(0.25, 0.4) if cover_mode else randf_range(0.6, 1.1))
+			b.shot_t = 0.22  # linger on target a beat after the last shot (cover mode ducks after this)
+
+
+func _bot_combat(b: Bot, dt: float, allowed: Array) -> void:
+	var want := atan2(pos.x - b.node.position.x, pos.z - b.node.position.z)
+	var seen := b.see >= 0.0
+	var dist_p := Vector2(pos.x - b.node.position.x, pos.z - b.node.position.z).length()
+	b.strafing = false
+	b.hurt_t = maxf(0.0, b.hurt_t - dt)
+	b.repos_t -= dt
+	if seen and not b.seen_prev:
+		b.react = _t("enemy_react") / 1000.0 * randf_range(0.8, 1.3)
+	elif not seen:
+		b.react = -1.0
+	b.seen_prev = seen
+	var cover_on := _tb("enemy_cover")
+	if not cover_on and b.phase != "open":
+		b.phase = "open"
+	if cover_on and (b.phase == "" or (b.phase == "open" and b.phase_t <= 0.0)):
+		var c := _find_cover(b, b.cover_ob)
+		if c.is_empty():
+			b.phase = "open"
+			b.phase_t = 1.0   # try again in a second
+		else:
+			b.cover_pt = c["pt"]
+			b.cover_ob = c["ob"]
+			b.phase = "go"
+			b.stuck_t = 0.0
+			b.stuck_from = Vector2(b.node.position.x, b.node.position.z)
+			b.repos_t = randf_range(6.0, 10.0)
+	if b.phase == "open":
+		b.phase_t -= dt
+		b.crouch = false
+		if not seen:
+			# alert but no sight line: go to where the player was last seen
+			_move_bot(b, b.last_seen.x, b.last_seen.y, BOT_RUN, dt)
+			return
+		b.node.rotation.y = _damp_angle(b.node.rotation.y, want, 10.0, dt)
+		b.strafe_t -= dt
+		if b.strafe_t <= 0.0:
+			b.strafe_dir = -b.strafe_dir if randf() < 0.7 else b.strafe_dir
+			b.strafe_t = randf_range(0.6, 1.3)
+		if not _strafe_bot(b, dt, want):
+			b.strafe_dir = -b.strafe_dir
+		if dist_p > 12.0:
+			_step_bot(b, pos.x, pos.z, 2.2, dt, want)
+		elif dist_p < 5.5:
+			_step_bot(b, b.node.position.x - (pos.x - b.node.position.x), b.node.position.z - (pos.z - b.node.position.z), 2.2, dt, want)
+		_bot_shoot_gate(b, dt, allowed, false)
+		return
+	match b.phase:
+		"go", "back":
+			b.crouch = false
+			var arrived := _step_bot(b, b.cover_pt.x, b.cover_pt.y, BOT_RUN, dt, atan2(b.cover_pt.x - b.node.position.x, b.cover_pt.y - b.node.position.z))
+			b.stuck_t += dt
+			if b.stuck_t > 1.0:
+				var moved := Vector2(b.node.position.x - b.stuck_from.x, b.node.position.z - b.stuck_from.y).length()
+				b.stuck_t = 0.0
+				b.stuck_from = Vector2(b.node.position.x, b.node.position.z)
+				if moved < 0.3 and not arrived:
+					b.bad[b.cover_ob] = _now() + 4.0
+					b.phase = ""
+					return
+			if arrived:
+				b.phase = "hide"
+				b.phase_t = randf_range(0.5, 1.0)
+				b.burst_left = 0
+		"hide":
+			b.crouch = true
+			b.node.rotation.y = _damp_angle(b.node.rotation.y, want, 7.0, dt)
+			b.phase_t -= dt
+			# the player moved and this spot no longer hides us: pick again
+			if int(_now() * 4.0) != int((_now() - dt) * 4.0) and not _hidden_from_player(b.cover_pt.x, b.cover_pt.y):
+				b.phase = ""
+				return
+			if b.phase_t <= 0.0:
+				if b.repos_t <= 0.0:
+					b.phase = ""   # reposition: next pick avoids this cover
+					return
+				var pk: Variant = _find_peek(b)
+				if pk == null:
+					b.bad[b.cover_ob] = _now() + 4.0
+					b.phase = ""
+					return
+				b.peek_pt = pk
+				b.phase = "peek"
+				b.phase_t = 0.0
+				b.crouch = false
+		"peek":
+			b.crouch = false
+			b.phase_t += dt
+			var got := _step_bot(b, b.peek_pt.x, b.peek_pt.y, BOT_PEEK, dt, want)
+			if seen:
+				b.phase = "fire"
+				b.phase_t = 0.0
+				b.lost_t = 0.0
+				b.rounds = 1
+				b.burst_left = maxi(1, int(round(_t("enemy_burst"))))
+				b.shot_t = 0.0
+				b.strafe_dir = 1.0 if randf() < 0.5 else -1.0
+				b.strafe_t = randf_range(0.5, 0.9)
+			elif got or b.phase_t > 2.0:
+				b.bad[b.cover_ob] = _now() + 3.0
+				b.phase = "back"
+		"fire":
+			b.crouch = false
+			b.phase_t += dt
+			b.lost_t = 0.0 if seen else b.lost_t + dt
+			b.strafe_t -= dt
+			if b.strafe_t <= 0.0:
+				b.strafe_dir = -b.strafe_dir
+				b.strafe_t = randf_range(0.5, 0.9)
+			# strafe along the cover edge, but only on the side where the player stays in sight
+			var pl := Vector2(pos.x - b.node.position.x, pos.z - b.node.position.z).normalized()
+			var perp := Vector2(-pl.y, pl.x)
+			var outward := (b.peek_pt - b.cover_pt).dot(perp)
+			var sgn := 1.0 if outward >= 0.0 else -1.0
+			var ps := Vector2(b.node.position.x - b.peek_pt.x, b.node.position.z - b.peek_pt.y).dot(perp) * sgn
+			if (ps > 1.3 and b.strafe_dir * sgn > 0.0) or (ps < 0.05 and b.strafe_dir * sgn < 0.0):
+				b.strafe_dir = -b.strafe_dir
+				b.strafe_t = randf_range(0.5, 0.9)
+			if not _strafe_bot(b, dt, want):
+				b.strafe_dir = -b.strafe_dir
+			_bot_shoot_gate(b, dt, allowed, true)
+			var done := b.burst_left <= 0 and b.rounds <= 0 and b.shot_t <= 0.0
+			if done or b.hurt_t > 0.0 or b.lost_t > 0.5 or b.phase_t > 3.0 or (b.react <= 0.0 and b.phase_t > 1.2 and b.burst_left == maxi(1, int(round(_t("enemy_burst"))))):
+				b.phase = "back"
+				b.stuck_t = 0.0
+				b.stuck_from = Vector2(b.node.position.x, b.node.position.z)
+
+
 func _enemy_fire(b: Bot) -> void:
+	enemy_shots += 1
 	b.node.kick(1.0)
+	# Base error from the accuracy slider (50 = the old +-0.1 rad). A moving, sprinting or sliding player is
+	# harder to hit; an enemy that is side-stepping is a little less accurate itself.
 	var err := (1.0 - _t("enemy_acc") / 100.0) * 0.2
+	var pspd := Vector2(vel.x, vel.z).length()
+	if stance == "vault":
+		pspd = _walk() * 1.5
+	err *= 1.0 + _t("enemy_move_pen") * clampf(pspd / maxf(_walk(), 0.1), 0.0, 1.8)
+	if b.strafing:
+		err *= 1.2
 	var y := b.node.rotation.y + randf_range(-err, err)
 	var origin := Vector3(b.node.position.x, 0.72 if b.crouch else 1.15, b.node.position.z)
 	var d := Vector3(sin(y), -0.02, cos(y)).normalized()
@@ -2393,6 +2714,7 @@ func _update_bots(dt: float) -> void:
 			continue
 		b.shoot_cd = maxf(0.0, b.shoot_cd - dt)
 		var see := _bot_see(b)
+		b.see = see
 		var dist := Vector2(pos.x - b.node.position.x, pos.z - b.node.position.z).length()
 		if see >= 0.0 or (hear and dist < 32.0):
 			b.alert = 3.5
@@ -2417,32 +2739,16 @@ func _update_bots(dt: float) -> void:
 			continue
 		if b.state == "patrol":
 			b.crouch = false
+			b.phase = ""
+			b.cover_ob = null
+			b.react = -1.0
+			b.seen_prev = false
+			b.strafing = false
 			var wp: Vector2 = b.waypoints[b.wp]
 			if _move_bot(b, wp.x, wp.y, 2.1, dt):
 				b.wp = (b.wp + 1) % b.waypoints.size()
 			continue
-		var want := atan2(pos.x - b.node.position.x, pos.z - b.node.position.z)
-		if b.state == "cover":
-			var pt: Variant = _cover_point(b)
-			if pt == null:
-				pt = b.last_seen
-			var v: Vector2 = pt
-			_move_bot(b, v.x, v.y, 3.6, dt)
-			b.crouch = _near_low_cover(b.node.position.x, b.node.position.z, 0.95) != null
-			if b.crouch:
-				b.node.rotation.y = _damp_angle(b.node.rotation.y, want, 6.0, dt)
-			continue
-		var cover: Variant = _cover_point(b)
-		var d2 := Vector2(pos.x - b.node.position.x, pos.z - b.node.position.z).length()
-		if cover != null and d2 > 7.0:
-			var cv: Vector2 = cover
-			b.crouch = _move_bot(b, cv.x, cv.y, 3.8, dt)
-		else:
-			b.crouch = _near_low_cover(b.node.position.x, b.node.position.z, 0.95) != null
-		b.node.rotation.y = _damp_angle(b.node.rotation.y, want, 8.0, dt)
-		if _game_active() and allowed.has(b) and b.shoot_cd <= 0.0 and _bot_see(b) >= 0.0:
-			_enemy_fire(b)
-			b.shoot_cd = 0.85 + randf() * 0.35
+		_bot_combat(b, dt, allowed)
 
 
 func _pose_bots(dt: float) -> void:

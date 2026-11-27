@@ -5,9 +5,9 @@ extends RefCounted
 ## Each item has a Snappy default ("def", the shipping default) and a Classic value ("cls",
 ## the pre-v1b feel). Toggles are 0/1 sliders flagged "toggle".
 
-const VERSION := "v1m"
+const VERSION := "v1n"
 ## Saved tuning from these versions is kept on load (newer keys get defaults).
-const COMPAT := ["v1f", "v1g", "v1h", "v1i", "v1j", "v1k", "v1l", "v1m"]
+const COMPAT := ["v1f", "v1g", "v1h", "v1i", "v1j", "v1k", "v1l", "v1m", "v1n"]
 
 static var _groups: Array = []
 
@@ -98,7 +98,12 @@ static func groups() -> Array:
 		]},
 		{"name": "Enemy", "items": [
 			_s("enemy_hp", "Enemy health (hits)", 8.0, 4.0, 1.0, 20.0, 1.0),
-			_s("enemy_acc", "Enemy accuracy", 50.0, 50.0, 0.0, 100.0, 1.0),
+			_s("enemy_acc", "Enemy accuracy", 58.0, 50.0, 0.0, 100.0, 1.0),
+			_s("enemy_move_pen", "Miss more vs moving (x)", 1.2, 0.0, 0.0, 3.0, 0.1),
+			_s("enemy_fire_ms", "Enemy shot interval (ms)", 240.0, 1000.0, 80.0, 1200.0, 10.0),
+			_s("enemy_burst", "Enemy burst length", 3.0, 1.0, 1.0, 8.0, 1.0),
+			_s("enemy_react", "Enemy reaction delay (ms)", 350.0, 0.0, 0.0, 1200.0, 10.0),
+			_t("enemy_cover", "Enemies use cover + peek", 1, 0),
 		]},
 	]
 	return _groups
