@@ -655,7 +655,7 @@ func _load_settings() -> void:
 			settings[k] = cf.get_value("s", k, settings[k])
 		# v1j: the default camera moved closer (14.5 -> 11.2). Saved tuning keeps every custom
 		# value; only a camera still sitting on the old default follows the new one.
-		if not ["v1j", "v1k", "v1l"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["cam_dist"]) - 14.5) < 0.01:
+		if not ["v1j", "v1k", "v1l", "v1m"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["cam_dist"]) - 14.5) < 0.01:
 			settings["cam_dist"] = 11.2
 		settings["tune_ver"] = TuneDefs.VERSION
 	for it in TuneDefs.all_items():
@@ -1881,6 +1881,10 @@ func _find_vault(dx_in: float, dz_in: float) -> Dictionary:
 		if toward < 0.25:
 			continue
 		var reach := dist + maxf(o.max_x - o.min_x, o.max_z - o.min_z) * 0.55 + RADIUS + 0.18
+		# v1m: deep props (crates, pallet stacks) are thicker than the old 0.42 m walls; make sure the landing is
+		# always clear of the far side along the vault direction.
+		var depth := absf(dx_in) * (o.max_x - o.min_x) + absf(dz_in) * (o.max_z - o.min_z)
+		reach = maxf(reach, dist + depth + RADIUS * 1.1 + 0.1)
 		var lx := pos.x + dx_in * reach
 		var lz := pos.z + dz_in * reach
 		if _blocked_at(lx, lz, RADIUS * 0.9):

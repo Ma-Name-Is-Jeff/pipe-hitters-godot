@@ -569,6 +569,105 @@ func _mood_objects() -> void:
 		puddle(pd[0], pd[1], pd[2], pd[3])
 
 
+# ---------- arena props (v1m): original low-poly Blender props, one MultiMesh per type ----------
+
+## Footprint / height of each prop in metres (w = x, h = y, d = z at yaw 0). Must match art/models/props.glb;
+## test_v1m.gd checks every obstacle against the real mesh bounds.
+const PROP_DEFS := {
+	"crate": Vector3(1.0, 1.0, 1.0),
+	"box": Vector3(0.9, 0.645, 0.64),
+	"pallet": Vector3(1.2, 0.144, 0.98),
+	"pallet_stack": Vector3(1.2, 0.72, 0.98),
+	"tire_stack3": Vector3(0.76, 0.66, 0.76),
+	"tire_stack4": Vector3(0.76, 0.88, 0.76),
+	"tire_tower": Vector3(0.76, 1.32, 0.76),
+	"barrel_a": Vector3(0.624, 0.92, 0.624),
+	"barrel_b": Vector3(0.624, 0.92, 0.624),
+	"car": Vector3(4.42, 1.45, 1.79),
+}
+const PROP_GAP := 0.06
+const PROP_VAULT_MAX := 1.15  # same as Main.VAULT_MAX: at or below this a prop is a vaultable low cover
+
+var prop_xf := {}  # name -> Array[Transform3D], committed into MultiMeshes by commit_props()
+var prop_obstacles: Array[Obstacle] = []
+
+
+## Place a prop (or a stack of props, bottom first). Solid props add ONE axis-aligned obstacle that covers the
+## whole stack, so collision, vaulting and bullets match what is drawn. quarters = yaw in 90 degree steps.
+func prop(names: Variant, x: float, z: float, quarters := 0, solid := true) -> void:
+	var list: Array = names if names is Array else [names]
+	var y := 0.0
+	var w := 0.0
+	var d := 0.0
+	for n in list:
+		var s: Vector3 = PROP_DEFS[n]
+		if not prop_xf.has(n):
+			prop_xf[n] = []
+		var tr := Transform3D(Basis(Vector3.UP, quarters * PI * 0.5), Vector3(x, y, z))
+		(prop_xf[n] as Array).append(tr)
+		y += s.y
+		w = maxf(w, s.x)
+		d = maxf(d, s.z)
+	if not solid:
+		return
+	if quarters % 2 != 0:
+		var tmp := w
+		w = d
+		d = tmp
+	var o := Obstacle.new()
+	o.min_x = x - w * 0.5
+	o.max_x = x + w * 0.5
+	o.min_z = z - d * 0.5
+	o.max_z = z + d * 0.5
+	o.h = y
+	o.vaultable = y <= PROP_VAULT_MAX
+	o.blocks_ray = true
+	obstacles.append(o)
+	prop_obstacles.append(o)
+
+
+## A tight row of props centred on (cx, cz), running along x or z, each rotated so its long side lies along the row.
+func prop_row(names: Array, cx: float, cz: float, along_x := true) -> void:
+	var q := 0 if along_x else 1
+	var lens: Array[float] = []
+	var total := PROP_GAP * (names.size() - 1)
+	for n in names:
+		var s: Vector3 = PROP_DEFS[(n as Array)[0] if n is Array else n]
+		lens.append(s.x)  # the prop's x side lies along the row (yaw 0 for x rows, 90 degrees for z rows)
+		total += s.x
+	var cur := -total * 0.5
+	for i in names.size():
+		var c := cur + lens[i] * 0.5
+		if along_x:
+			prop(names[i], cx + c, cz, 0)
+		else:
+			prop(names[i], cx, cz + c, 1)
+		cur += lens[i] + PROP_GAP
+
+
+func commit_props() -> void:
+	var mats := StandardMaterial3D.new()
+	mats.vertex_color_use_as_albedo = true
+	mats.roughness = 0.92
+	mats.albedo_color = Color(0.86, 0.86, 0.86)
+	var scn := (load("res://art/models/props.glb") as PackedScene).instantiate()
+	for n in prop_xf:
+		var src := scn.find_child(n, true, false) as MeshInstance3D
+		var xs: Array = prop_xf[n]
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = src.mesh
+		mm.instance_count = xs.size()
+		for i in xs.size():
+			mm.set_instance_transform(i, xs[i])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.name = "Props_" + n
+		mmi.multimesh = mm
+		mmi.material_override = mats
+		root.add_child(mmi)
+	scn.free()
+
+
 # ---------- tuning arena (about 40 x 40) ----------
 
 const ARENA_HALF := 20.0
@@ -599,14 +698,31 @@ func build_arena() -> void:
 	wall_x(e, 0, 42, null, 3.0, peri, 1.0)
 	wall_z(-e, 0, 42, null, 3.0, peri, 1.0)
 	wall_z(e, 0, 42, null, 3.0, peri, 1.0)
-	# Low cover.
-	low(-7, 6, 4.0, 0.42, 0.85)
-	low(6, 7, 0.42, 4.0, 0.88)
-	low(-3, -4, 4.4, 0.42, 0.8)
-	low(12, -10, 3.6, 0.42, 0.82)
-	low(-12, -12, 0.42, 3.6, 0.85)
-	cluster(-14, 2)
-	cluster(9, -4)
+	# Props replace the plain low walls and crate clusters (same places, same roles). Low props (<= 1.15 m) stay
+	# vaultable low cover; tall props and the car are full cover (not vaultable, block bullets and sight).
+	# The slide lane (z = -1.2..1.2, x = -8..13) stays clear.
+	prop_row([["pallet_stack"], ["pallet_stack"], ["pallet_stack"]], -7.0, 6.0, true)          # was low(-7, 6, 4.0 x 0.42)
+	prop_row(["tire_stack4", "tire_stack3", "tire_stack4", "tire_stack3", "tire_stack4"], 6.0, 7.0, false)  # was low(6, 7)
+	prop_row(["box", "box", "crate", "box", "box"], -3.0, -4.0, true)                            # was low(-3, -4)
+	prop_row(["barrel_a", "barrel_b", "barrel_a", "barrel_a", "barrel_b", "barrel_a"], 12.6, -10.0, true)  # was low(12, -10)
+	prop_row(["crate", "crate", "box", "box"], -12.0, -12.0, false)                              # was low(-12, -12)
+	# Tall cover: crates on a pallet (was cluster(-14, 2)), tire tower + tall pallet stack (was cluster(9, -4)).
+	prop(["pallet", "crate", "crate"], -14.0, 2.0)
+	prop("crate", -12.85, 2.75)
+	prop("box", -11.4, 1.6)
+	prop("tire_tower", 9.0, -4.0)
+	prop(["pallet_stack", "pallet_stack"], 10.5, -3.5)
+	prop("barrel_b", 7.5, -3.6)
+	prop(["pallet_stack", "pallet_stack"], 2.0, -16.0, 1)
+	prop("barrel_a", 3.2, -15.2)
+	# The one stationary generic car: full cover, long side along x.
+	prop("car", 9.5, 12.5)
+	# Loose pallets lying on the ground (walk-over decoration, no collision).
+	prop("pallet", -5.0, 7.6, 0, false)
+	prop("pallet", -10.4, 4.6, 1, false)
+	prop("pallet", 7.6, -7.4, 0, false)
+	prop("pallet", -2.0, 14.0, 1, false)
+	prop("pallet", 5.0, 12.4, 0, false)
 	# Hurdles to vault.
 	hurdle(0, 8, false)
 	hurdle(-14, -6, true)
@@ -642,3 +758,4 @@ func build_arena() -> void:
 	mi.mesh = mesh
 	mi.material_override = lm
 	root.add_child(mi)
+	commit_props()

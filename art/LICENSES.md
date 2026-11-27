@@ -26,6 +26,14 @@
 - Kenney "Animated Characters" (CC0): license is fine, but it is a chibi low-poly figure, far from the thick
   stylized-realistic look we want, so not used.
 
+## Arena props (v1m) — original
+
+Crates, small wooden boxes, single and stacked pallets, tire piles, barrels and the one generic car
+(`art/models/props.glb`, 10 meshes, ~5k tris total) are original low-poly models generated procedurally by
+`art/src/build_props.py` (Blender 5.2.5 headless; source `art/src/props.blend`). No third-party meshes, textures,
+logos, text or recognizable real vehicles: the car is a plain three-box sedan with no badges, plate or branding.
+Nothing CC0 or otherwise was downloaded for these.
+
 ## Rifle, environment, everything else
 
 Original, made procedurally in this repo (`art/src/build_rifle.py`, scripts). No third-party assets.

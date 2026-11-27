@@ -5,9 +5,9 @@ extends RefCounted
 ## Each item has a Snappy default ("def", the shipping default) and a Classic value ("cls",
 ## the pre-v1b feel). Toggles are 0/1 sliders flagged "toggle".
 
-const VERSION := "v1l"
+const VERSION := "v1m"
 ## Saved tuning from these versions is kept on load (newer keys get defaults).
-const COMPAT := ["v1f", "v1g", "v1h", "v1i", "v1j", "v1k", "v1l"]
+const COMPAT := ["v1f", "v1g", "v1h", "v1i", "v1j", "v1k", "v1l", "v1m"]
 
 static var _groups: Array = []
 
