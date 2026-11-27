@@ -681,6 +681,8 @@ func _on_setting(key: String, value: Variant) -> void:
 		"volume":
 			settings["volume"] = float(value)
 			_apply_volume()
+		"btn_scale", "btn_opacity":
+			settings[key] = TuneDefs.clamp_value(key, float(value))
 		_:
 			settings[key] = TuneDefs.clamp_value(key, float(value))
 			settings["preset"] = "custom"
@@ -724,6 +726,8 @@ func _apply_bars() -> void:
 func apply_preset(name: String) -> void:
 	var vals := TuneDefs.preset_values(name)
 	for k in vals.keys():
+		if k == "btn_scale" or k == "btn_opacity":
+			continue
 		settings[k] = vals[k]
 	settings["preset"] = name
 	zoom_show = float(settings["zoom"])

@@ -5,7 +5,7 @@ extends RefCounted
 ## Each item has a Snappy default ("def", the shipping default) and a Classic value ("cls",
 ## the pre-v1b feel). Toggles are 0/1 sliders flagged "toggle".
 
-const VERSION := "v1e"
+const VERSION := "v1f"
 
 static var _groups: Array = []
 
@@ -81,6 +81,8 @@ static func groups() -> Array:
 			_s("vignette", "Damage vignette", 70.0, 0.0, 0.0, 100.0, 1.0),
 			_s("hit_flash", "Enemy hit flash (ms)", 140.0, 120.0, 0.0, 400.0, 10.0),
 			_t("hud_bottom", "Bottom-center HUD", 1, 0),
+			_s("btn_scale", "Button size (%)", 100.0, 100.0, 50.0, 150.0, 5.0),
+			_s("btn_opacity", "Button opacity (%)", 50.0, 50.0, 20.0, 100.0, 1.0),
 		]},
 		{"name": "Enemy", "items": [
 			_s("enemy_hp", "Enemy health (hits)", 8.0, 4.0, 1.0, 20.0, 1.0),

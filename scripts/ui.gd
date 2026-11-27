@@ -56,6 +56,8 @@ var toast_label: Label
 var toast_t := 0.0
 var test_size := Vector2.ZERO
 var btn_held := {}
+var btn_scale_pct := 100.0
+var btn_opacity_pct := 50.0
 var btn_mode := true
 var hud_bottom := true
 var pause_mode_btn: Button
@@ -288,11 +290,15 @@ func _build_pause() -> void:
 	_slider(list, "zoom", "Zoom", 0, 100)
 	_slider(list, "assist", "Aim assist strength", 0, 100)
 	_slider(list, "volume", "Volume", 0, 100)
+	var controls := _label(list, "Controls", 22, Color(0.95, 0.82, 0.42))
+	controls.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_slider(list, "btn_scale", "Button size", 50, 150, 5)
+	_slider(list, "btn_opacity", "Button opacity", 20, 100)
 	_button(list, "Restart mission", func() -> void: restart.emit())
 	pause_panel.visible = false
 
 
-func _slider(parent: Control, key: String, text: String, lo: float, hi: float) -> void:
+func _slider(parent: Control, key: String, text: String, lo: float, hi: float, step: float = 1.0) -> void:
 	var row := HBoxContainer.new()
 	parent.add_child(row)
 	var l := _label(row, text, 19)
@@ -302,7 +308,7 @@ func _slider(parent: Control, key: String, text: String, lo: float, hi: float) -
 	var s := HSlider.new()
 	s.min_value = lo
 	s.max_value = hi
-	s.step = 1
+	s.step = step
 	s.custom_minimum_size = Vector2(170, 40)
 	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	s.value_changed.connect(func(val: float) -> void:
@@ -320,9 +326,10 @@ func sync(settings: Dictionary) -> void:
 	(opt["fullscreen"] as Button).text = "Fullscreen: " + ("On" if settings["fullscreen"] else "Off")
 	(opt["invert_move"] as Button).text = "Invert move stick: " + ("On" if settings["invert_move"] else "Off")
 	(opt["facing"] as Button).text = "Facing: " + ("Follow view" if settings["facing"] == "follow" else "Free aim")
-	for k in ["aim_sens", "zoom", "assist", "volume"]:
+	for k in ["aim_sens", "zoom", "assist", "volume", "btn_scale", "btn_opacity"]:
 		(opt[k] as HSlider).value = float(settings[k])
 		(opt_val[k] as Label).text = str(int(settings[k]))
+	set_control_prefs(float(settings.get("btn_scale", 100.0)), float(settings.get("btn_opacity", 50.0)))
 	for k in tune_sliders.keys():
 		var sl: HSlider = tune_sliders[k]
 		sl.value = float(settings[k])
@@ -413,6 +420,9 @@ func touch_metrics() -> Dictionary:
 		"margin": maxf(_dp(8.0), 0.016 * h),
 		"gap": maxf(_dp(8.0), 0.02 * h),
 	}
+	var sc := clampf(btn_scale_pct / 100.0, 0.5, 1.5)
+	for key in ["fire", "vault", "slide", "swap", "reload", "sprint", "grenade", "pause", "view", "tune", "stick"]:
+		d[key] = float(d[key]) * sc
 	return d
 
 
@@ -452,8 +462,13 @@ func _clamp_btn(k: String, s: Vector2, margin: float, hud: Rect2) -> void:
 	c.y = clampf(c.y, margin + r, s.y - margin - r)
 	var br := Rect2(c - Vector2(r, r), Vector2(r, r) * 2.0)
 	if hud.size.x > 1.0 and br.intersects(hud):
-		# Push up so the button sits above the HUD.
-		c.y = hud.position.y - r - 6.0
+		# Prefer sitting to the right of the HUD (fire cluster); otherwise push up.
+		var right_of := hud.position.x + hud.size.x + r + 6.0
+		if right_of + r <= s.x - margin:
+			c.x = maxf(c.x, right_of)
+		if Rect2(c - Vector2(r, r), Vector2(r, r) * 2.0).intersects(hud):
+			c.y = hud.position.y - r - 6.0
+		c.x = clampf(c.x, margin + r, s.x - margin - r)
 		c.y = clampf(c.y, margin + r, s.y - margin - r)
 	p.position = c - p.size * 0.5
 
@@ -506,6 +521,25 @@ func _separate_controls(keys: Array, stick: Vector2, stick_r: float, gap: float)
 						cb += half
 						pa.position = ca - pa.size * 0.5
 						pb.position = cb - pb.size * 0.5
+
+
+func _keys_overlap(keys: Array, gap: float) -> bool:
+	for a in keys.size():
+		var ka: String = keys[a]
+		var pa: Control = tbtns[ka]
+		if not pa.visible:
+			continue
+		var ca := pa.position + pa.size * 0.5
+		var ra := pa.size.x * 0.5
+		for b in range(a + 1, keys.size()):
+			var kb: String = keys[b]
+			var pb: Control = tbtns[kb]
+			if not pb.visible:
+				continue
+			var cb := pb.position + pb.size * 0.5
+			if ca.distance_to(cb) < ra + pb.size.x * 0.5 + gap - 0.5:
+				return true
+	return false
 
 
 func _layout() -> void:
@@ -578,33 +612,74 @@ func _layout() -> void:
 	sticks.show_right = not btn_mode
 
 	if btn_mode:
+		var fire_keys: Array = ["fire", "sprint", "slide", "vault", "reload", "grenade", "swap"]
 		var fire: float = float(m["fire"])
 		var fr := fire * 0.5
-		# Tuck FIRE into the bottom-right corner so more of the playfield stays visible.
+		var high := btn_scale_pct > 110.0
 		var fc := Vector2(s.x - margin - fr, s.y - margin - fr)
-		# Stay to the right of the bottom HUD.
 		if hud.size.x > 1.0:
 			fc.x = maxf(fc.x, hud.position.x + hud.size.x + fr + gap)
 			fc.x = minf(fc.x, s.x - margin - fr)
 		_place_btn("fire", fc)
-		# Compact arc hugging FIRE, biased toward the corner.
-		var arc := [
-			["sprint", deg_to_rad(210.0)],
-			["slide", deg_to_rad(168.0)],
-			["vault", deg_to_rad(128.0)],
-			["reload", deg_to_rad(95.0)],
-			["grenade", deg_to_rad(62.0)],
-			["swap", deg_to_rad(246.0)],
-		]
-		for item in arc:
-			var kk: String = item[0]
-			var ang: float = item[1]
-			var rr: float = (tbtns[kk] as Control).size.x * 0.5
-			var orbit := fr + rr + gap
-			if kk == "swap":
-				orbit *= 1.28
-			var pos := fc + Vector2(cos(ang), -sin(ang)) * orbit
-			_place_btn(kk, pos)
+		if high:
+			# 150%: keep FIRE in the corner and pack satellites in the band
+			# left of FIRE, below TUNE/VIEW and above the bottom HUD.
+			var top_band := 0.0
+			for tk in ["pause", "view", "tune"]:
+				var tb: Control = tbtns[tk]
+				top_band = maxf(top_band, tb.position.y + tb.size.y + gap)
+			var safe_right := fc.x - fr - gap
+			var safe_bot := (hud.position.y - gap) if hud.size.x > 1.0 else (s.y - margin)
+			var safe_left := sticks.centers[0].x + sr + gap
+			# Lower row (right to left, nearer the HUD): GRN, RUN, RLD
+			# Upper row: VAULT, SLIDE, SWAP
+			var lower: Array = ["grenade", "sprint", "reload"]
+			var upper: Array = ["vault", "slide", "swap"]
+			var cursor := safe_right
+			for kk in lower:
+				var rr: float = (tbtns[kk] as Control).size.x * 0.5
+				var px := cursor - rr
+				var py := safe_bot - rr
+				py = clampf(py, top_band + rr, safe_bot - rr)
+				px = maxf(px, safe_left + rr)
+				_place_btn(kk, Vector2(px, py))
+				cursor = px - rr - gap
+			cursor = safe_right
+			for kk in upper:
+				var rr2: float = (tbtns[kk] as Control).size.x * 0.5
+				var px2 := cursor - rr2
+				var py2 := top_band + rr2
+				py2 = minf(py2, safe_bot - rr2)
+				# Keep the upper row from overlapping the lower row or FIRE.
+				px2 = maxf(px2, safe_left + rr2)
+				_place_btn(kk, Vector2(px2, py2))
+				cursor = px2 - rr2 - gap
+			_separate_controls(fire_keys, sticks.centers[0], sr, gap)
+			for k2 in fire_keys:
+				_clamp_btn(k2, s, margin, hud)
+			_separate_controls(fire_keys, sticks.centers[0], sr, gap)
+		else:
+			# v1e corner arc at 50–100%.
+			var arc := [
+				["sprint", deg_to_rad(210.0)],
+				["slide", deg_to_rad(168.0)],
+				["vault", deg_to_rad(128.0)],
+				["reload", deg_to_rad(95.0)],
+				["grenade", deg_to_rad(62.0)],
+				["swap", deg_to_rad(246.0)],
+			]
+			for item in arc:
+				var kk: String = item[0]
+				var ang: float = item[1]
+				var rr: float = (tbtns[kk] as Control).size.x * 0.5
+				var orbit := fr + rr + gap
+				if kk == "swap":
+					orbit *= 1.28
+				_place_btn(kk, fc + Vector2(cos(ang), -sin(ang)) * orbit)
+			_separate_controls(fire_keys, sticks.centers[0], sr, gap)
+			for k2 in fire_keys:
+				_clamp_btn(k2, s, margin, hud)
+			_separate_controls(fire_keys, sticks.centers[0], sr, gap)
 	else:
 		var rc: Vector2 = sticks.centers[1]
 		_place_btn("slide", rc + Vector2(-sr * 2.15, 8))
@@ -612,13 +687,8 @@ func _layout() -> void:
 		_place_btn("swap", rc + Vector2(8, -sr * 2.15))
 		_place_btn("reload", rc + Vector2(-sr * 2.9, -sr * 0.7))
 
-	var cluster: Array = ["fire", "sprint", "slide", "vault", "reload", "grenade", "swap", "pause", "view", "tune"]
-	_separate_controls(cluster, sticks.centers[0], sr, gap)
-	for k2 in cluster:
-		_clamp_btn(k2, s, margin, hud)
-	_separate_controls(cluster, sticks.centers[0], sr, gap)
-	for k3 in cluster:
-		_clamp_btn(k3, s, margin, hud)
+	for k4 in ["pause", "view", "tune"]:
+		_clamp_btn(k4, s, margin, hud)
 
 	(tbtns["swap"] as Control).visible = touch_mode and not arena_mode
 	var tw := minf(900.0, s.x * 0.68)
@@ -657,6 +727,14 @@ func touch_button_at(p: Vector2) -> String:
 	return ""
 
 
+func set_control_prefs(scale_pct: float, opacity_pct: float) -> void:
+	btn_scale_pct = clampf(scale_pct, 50.0, 150.0)
+	btn_opacity_pct = clampf(opacity_pct, 20.0, 100.0)
+	for k in tbtns.keys():
+		_apply_btn_mod(k)
+	_layout()
+
+
 func set_btn_pressed(k: String, on: bool) -> void:
 	btn_held[k] = on
 	_apply_btn_mod(k)
@@ -666,7 +744,8 @@ func _apply_btn_mod(k: String) -> void:
 	var c: Control = tbtns.get(k)
 	if c == null:
 		return
-	var a := 1.0 if bool(btn_held.get(k, false)) else BTN_IDLE_A
+	var idle := clampf(btn_opacity_pct / 100.0, 0.2, 1.0)
+	var a := 1.0 if bool(btn_held.get(k, false)) else idle
 	c.modulate = Color(1, 1, 1, a)
 
 
@@ -679,7 +758,7 @@ func flash_button(k: String) -> void:
 		return
 	c.modulate = Color(1, 1, 1, 1)
 	var tw := create_tween()
-	tw.tween_property(c, "modulate", Color(1, 1, 1, BTN_IDLE_A), 0.2)
+	tw.tween_property(c, "modulate", Color(1, 1, 1, clampf(btn_opacity_pct / 100.0, 0.2, 1.0)), 0.2)
 
 
 func set_hp(frac: float) -> void:
