@@ -53,7 +53,7 @@ func _step(frames: int) -> void:
 func run() -> void:
 	await process_frame
 	await process_frame
-	ok("version v1m", TuneDefs.VERSION in ["v1m", "v1n"])
+	ok("version v1m", TuneDefs.VERSION in ["v1m", "v1n", "v1o"])
 	lv = main.arena_level
 
 	# ---- assets ----

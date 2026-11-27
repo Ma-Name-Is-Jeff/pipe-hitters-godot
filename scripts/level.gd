@@ -717,6 +717,12 @@ func build_arena() -> void:
 	prop("barrel_a", 3.2, -15.2)
 	# The one stationary generic car: full cover, long side along x.
 	prop("car", 9.5, 12.5)
+	# v1o: four more tall stacks (reused meshes) so bots have hide spots in every quarter.
+	# Slide lane (z -1.2..1.2, x -8..13.9), start, spawns and patrols stay clear.
+	prop(["pallet", "crate", "crate"], -14.0, 11.5)          # NW crate stack
+	prop(["pallet_stack", "pallet_stack"], 13.0, 7.5)        # NE pallet tower
+	prop("tire_tower", -10.0, -16.0)                         # SW tire tower
+	prop(["pallet", "crate", "crate"], 11.0, -15.0)          # SE crate stack
 	# Loose pallets lying on the ground (walk-over decoration, no collision).
 	prop("pallet", -5.0, 7.6, 0, false)
 	prop("pallet", -10.4, 4.6, 1, false)

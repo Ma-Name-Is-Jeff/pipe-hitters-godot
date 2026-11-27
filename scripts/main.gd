@@ -417,7 +417,7 @@ func _update_mates(dt: float) -> void:
 				if b.state == "down":
 					continue
 				var bdist := Vector2(b.node.position.x - m.node.position.x, b.node.position.z - m.node.position.z).length()
-				if bdist < bd and not _los_blocked(m.node.position.x, m.node.position.z, b.node.position.x, b.node.position.z):
+				if bdist < bd and not _shot_blocked(m.node.position.x, m.node.position.z, b.node.position.x, b.node.position.z, b.crouch):
 					bd = bdist
 					m.target = b
 		if m.target != null and m.target.state == "down":
@@ -435,6 +435,13 @@ func _update_mates(dt: float) -> void:
 			var tb := m.target
 			var aim := Vector3(tb.node.position.x, 0.6 if tb.crouch else 1.1, tb.node.position.z)
 			var hit := randf() < 0.4
+			if _shot_blocked(m.node.position.x, m.node.position.z, tb.node.position.x, tb.node.position.z, tb.crouch):
+				hit = false
+				var cd := _low_cover_along(m.node.position.x, m.node.position.z, tb.node.position.x, tb.node.position.z)
+				if cd >= 0.0:
+					var md := Vector2(tb.node.position.x - m.node.position.x, tb.node.position.z - m.node.position.z)
+					var ml := maxf(md.length(), 1e-4)
+					aim = Vector3(m.node.position.x + md.x / ml * cd, 0.7, m.node.position.z + md.y / ml * cd)
 			if not hit:
 				aim += Vector3(randf_range(-0.8, 0.8), randf_range(-0.3, 0.5), randf_range(-0.8, 0.8))
 			m.node.kick(1.0)
@@ -678,11 +685,11 @@ func _load_settings() -> void:
 			settings[k] = cf.get_value("s", k, settings[k])
 		# v1j: the default camera moved closer (14.5 -> 11.2). Saved tuning keeps every custom
 		# value; only a camera still sitting on the old default follows the new one.
-		if not ["v1j", "v1k", "v1l", "v1m"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["cam_dist"]) - 14.5) < 0.01:
+		if not ["v1j", "v1k", "v1l", "v1m", "v1n", "v1o"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["cam_dist"]) - 14.5) < 0.01:
 			settings["cam_dist"] = 11.2
 		# v1n: enemies got harder. A saved accuracy still on the old default (50) follows the new default;
 		# custom values are kept and the new enemy keys simply start at their defaults.
-		if not ["v1n"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["enemy_acc"]) - 50.0) < 0.01:
+		if not ["v1n", "v1o"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["enemy_acc"]) - 50.0) < 0.01:
 			settings["enemy_acc"] = TuneDefs.defaults()["enemy_acc"]
 		settings["tune_ver"] = TuneDefs.VERSION
 	for it in TuneDefs.all_items():
@@ -1606,7 +1613,10 @@ func _los_blocked(ax: float, az: float, bx: float, bz: float) -> bool:
 
 
 func _low_cover(o: Obstacle) -> bool:
-	return o.h >= 0.45 and o.h <= 1.2
+	# Vaultable crates, boxes, barrels, tire piles, pallet stacks, hurdles: not tall enough
+	# to stop a standing shot, but they hide anyone who ducks. The height cut is the same
+	# 1.2 m rule as _los_blocked / tall cover (strictly below, so a 1.2 m wall stays tall).
+	return o.blocks_ray and o.h >= 0.45 and o.h < 1.2
 
 
 func _near_low_cover(x: float, z: float, within: float) -> Obstacle:
@@ -1621,6 +1631,71 @@ func _near_low_cover(x: float, z: float, within: float) -> Obstacle:
 		if d < bd:
 			bd = d
 			best = o
+	return best
+
+
+## Player is in a low stance (crouch or slide): low props will stop shots at them.
+func _is_low() -> bool:
+	return crouch or stance == "slide"
+
+
+## XZ distance to the first low-cover obstacle on the segment, or -1. Height is ignored:
+## a 0.64 m box and a 1.0 m crate both hide a crouched target the same way.
+func _low_cover_along(ax: float, az: float, bx: float, bz: float) -> float:
+	var dx := bx - ax
+	var dz := bz - az
+	var max_d := sqrt(dx * dx + dz * dz)
+	if max_d < 0.08:
+		return -1.0
+	dx /= max_d
+	dz /= max_d
+	var ix := 1.0 / (dx if absf(dx) > 1e-8 else 1e-8)
+	var iz := 1.0 / (dz if absf(dz) > 1e-8 else 1e-8)
+	var best := -1.0
+	for ob in obstacles:
+		if not _low_cover(ob):
+			continue
+		var t1 := (ob.min_x - ax) * ix
+		var t2 := (ob.max_x - ax) * ix
+		var tmin := minf(t1, t2)
+		var tmax := maxf(t1, t2)
+		t1 = (ob.min_z - az) * iz
+		t2 = (ob.max_z - az) * iz
+		tmin = maxf(tmin, minf(t1, t2))
+		tmax = minf(tmax, maxf(t1, t2))
+		if tmax >= tmin and tmin > 0.06 and tmin < max_d - 0.06:
+			if best < 0.0 or tmin < best:
+				best = tmin
+	return best
+
+
+## A shot from (ax, az) at a target at (bx, bz). Tall cover always blocks. Low props block
+## only when the target is crouched or sliding, and only if the line actually goes through them.
+## Standing on either side of a low prop is exposed (the shot goes over).
+func _shot_blocked(ax: float, az: float, bx: float, bz: float, target_low: bool) -> bool:
+	if _los_blocked(ax, az, bx, bz):
+		return true
+	if target_low and _low_cover_along(ax, az, bx, bz) >= 0.0:
+		return true
+	return false
+
+
+## Bullet travel distance. Tall cover (h >= 1.2) always stops the shot at its real box.
+## Low props never stop a shot at a standing target (even a 1 m crate in front of a crouched
+## muzzle). Against a crouched target they stop the shot on the XZ line, so a short box
+## protects just as well as a crate.
+func _bullet_hit(o: Vector3, d: Vector3, max_d: float, target_low: bool, min_t := 0.05) -> float:
+	var best := _world_hit(o, d, max_d, true, min_t)
+	if not target_low:
+		return best
+	var lxz := Vector2(d.x, d.z).length()
+	if lxz < 1e-6:
+		return best
+	var along := _low_cover_along(o.x, o.z, o.x + d.x / lxz * max_d, o.z + d.z / lxz * max_d)
+	if along >= 0.0:
+		var t := along / lxz
+		if t > min_t and t < best:
+			best = t
 	return best
 
 
@@ -1676,7 +1751,7 @@ func _assist_valid(b: Bot, break_cone: float) -> bool:
 		return false
 	if absf(off[0]) > break_cone:
 		return false
-	if _los_blocked(pos.x, pos.z, b.node.position.x, b.node.position.z):
+	if _shot_blocked(pos.x, pos.z, b.node.position.x, b.node.position.z, b.crouch):
 		return false
 	if touch_mode and aim_mag > 0.72:
 		if absf(_wrap(_stick_world_yaw() - atan2(off[2], off[3]))) > _aim_cone() * 1.6:
@@ -1706,7 +1781,7 @@ func _find_assist() -> Bot:
 			continue
 		if absf(off[0]) > cone:
 			continue
-		if _los_blocked(pos.x, pos.z, b.node.position.x, b.node.position.z):
+		if _shot_blocked(pos.x, pos.z, b.node.position.x, b.node.position.z, b.crouch):
 			continue
 		var close := 1.0 - clampf(dist / AIM_RANGE, 0.0, 1.0)
 		var score := absf(off[0]) * 3.2 + dist * 0.05 - close * 0.35
@@ -1730,7 +1805,7 @@ func _lock_valid(b: Bot) -> bool:
 	var d := _lock_dist(b)
 	if d > _range() or d < 0.4:
 		return false
-	if _los_blocked(pos.x, pos.z, b.node.position.x, b.node.position.z):
+	if _shot_blocked(pos.x, pos.z, b.node.position.x, b.node.position.z, b.crouch):
 		return false
 	return true
 
@@ -2260,7 +2335,11 @@ func _fire() -> void:
 			d.y += randf_range(-0.5, 0.5) * spr * 0.4
 			d.z += randf_range(-1, 1) * spr
 			d = d.normalized()
-		var wd := _world_hit(origin, d, rng)
+		var tgt_low := false
+		var look := _bot_hit_test(origin, d, rng)
+		if look[0] != null:
+			tgt_low = (look[0] as Bot).crouch
+		var wd := _bullet_hit(origin, d, rng, tgt_low)
 		var bh := _bot_hit_test(origin, d, minf(wd, rng))
 		var end: Vector3
 		if bh[0] != null:
@@ -2269,6 +2348,8 @@ func _fire() -> void:
 			any_hit = true
 		else:
 			end = origin + d * wd
+			if tgt_low:
+				end.y = minf(end.y, 0.9)
 		_spawn_tracer(muz, end)
 		if bh[0] == null:
 			_spawn_spark(end)
@@ -2347,7 +2428,7 @@ func _bot_see(b: Bot) -> float:
 	var dist := sqrt(dx * dx + dz * dz)
 	if dist > 26.0 or hp <= 0.0:
 		return -1.0
-	if _los_blocked(b.node.position.x, b.node.position.z, pos.x, pos.z):
+	if _shot_blocked(b.node.position.x, b.node.position.z, pos.x, pos.z, _is_low()):
 		return -1.0
 	return dist
 
@@ -2391,16 +2472,17 @@ func _seg_clear(ax: float, az: float, bx: float, bz: float) -> bool:
 	return true
 
 
-## Hidden = sight line to the player blocked from the point and from a spot 0.3 m either side of it.
+## Hidden = a crouched fighter here would be protected from the player's shot, including a
+## 0.3 m step either side so a thin pole does not count as cover.
 func _hidden_from_player(x: float, z: float) -> bool:
-	if not _los_blocked(x, z, pos.x, pos.z):
+	if not _shot_blocked(pos.x, pos.z, x, z, true):
 		return false
 	var dx := pos.x - x
 	var dz := pos.z - z
 	var l := maxf(sqrt(dx * dx + dz * dz), 1e-4)
 	var px := -dz / l * 0.3
 	var pz := dx / l * 0.3
-	return _los_blocked(x + px, z + pz, pos.x, pos.z) and _los_blocked(x - px, z - pz, pos.x, pos.z)
+	return _shot_blocked(pos.x, pos.z, x + px, z + pz, true) and _shot_blocked(pos.x, pos.z, x - px, z - pz, true)
 
 
 ## Best tall prop to hide behind: the spot on its far side (from the player) that really blocks sight,
@@ -2413,7 +2495,11 @@ func _find_cover(b: Bot, avoid: Obstacle) -> Dictionary:
 	var now := _now()
 	var dirs := [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1), Vector2(0.707, 0.707), Vector2(-0.707, 0.707), Vector2(0.707, -0.707), Vector2(-0.707, -0.707)]
 	for o in obstacles:
-		if o.h < BOT_COVER_MIN_H or not o.blocks_ray:
+		# Tall props (h >= 1.2) and low props both work; the hide test is stance-aware
+		# (a crouched bot is safe behind a box, a standing one is not).
+		if not o.blocks_ray or o.h < 0.45:
+			continue
+		if o.h < BOT_COVER_MIN_H and not _low_cover(o):
 			continue
 		var w := o.max_x - o.min_x
 		var d := o.max_z - o.min_z
@@ -2421,7 +2507,7 @@ func _find_cover(b: Bot, avoid: Obstacle) -> Dictionary:
 			continue
 		var mx := (o.min_x + o.max_x) * 0.5
 		var mz := (o.min_z + o.max_z) * 0.5
-		if Vector2(bx - mx, bz - mz).length() > 18.0:
+		if Vector2(bx - mx, bz - mz).length() > 22.0:
 			continue
 		if b.bad.has(o) and float(b.bad[o]) > now:
 			continue
@@ -2435,13 +2521,13 @@ func _find_cover(b: Bot, avoid: Obstacle) -> Dictionary:
 			if not _bot_free(px, pz):
 				continue
 			var dp := Vector2(px - pos.x, pz - pos.z).length()
-			if dp < 2.5 or dp > 16.0:
+			if dp < 2.5 or dp > 20.0:
 				continue
 			if not _hidden_from_player(px, pz):
 				continue
 			if not _seg_clear(bx, bz, px, pz):
 				continue
-			var s := Vector2(px - bx, pz - bz).length() + 0.6 * maxf(0.0, dp - 11.0) + (6.0 if o == avoid else 0.0) + randf() * 0.6
+			var s := Vector2(px - bx, pz - bz).length() + 0.6 * maxf(0.0, dp - 11.0) + (6.0 if o == avoid else 0.0) + (1.4 if _low_cover(o) else 0.0) + randf() * 0.6
 			if s < bs:
 				bs = s
 				best = {"pt": Vector2(px, pz), "ob": o}
@@ -2465,7 +2551,7 @@ func _find_peek(b: Bot) -> Variant:
 				break
 			if not _seg_clear(h.x, h.y, q.x, q.y):
 				break
-			if not _los_blocked(q.x, q.y, pos.x, pos.z):
+			if not _shot_blocked(q.x, q.y, pos.x, pos.z, _is_low()):
 				if float(dist) < bd:
 					bd = float(dist)
 					best = q
@@ -2611,6 +2697,19 @@ func _bot_combat(b: Bot, dt: float, allowed: Array) -> void:
 				if b.repos_t <= 0.0:
 					b.phase = ""   # reposition: next pick avoids this cover
 					return
+				# Low cover: if we can already hit (player is standing), stay crouched and fire
+				# over the prop. Tall cover, or a crouched player, still needs a side peek.
+				if b.see >= 0.0:
+					b.peek_pt = b.cover_pt
+					b.phase = "fire"
+					b.phase_t = 0.0
+					b.lost_t = 0.0
+					b.rounds = 1
+					b.burst_left = maxi(1, int(round(_t("enemy_burst"))))
+					b.shot_t = 0.0
+					b.strafe_dir = 1.0 if randf() < 0.5 else -1.0
+					b.strafe_t = randf_range(0.5, 0.9)
+					return
 				var pk: Variant = _find_peek(b)
 				if pk == null:
 					b.bad[b.cover_ob] = _now() + 4.0
@@ -2637,13 +2736,23 @@ func _bot_combat(b: Bot, dt: float, allowed: Array) -> void:
 				b.bad[b.cover_ob] = _now() + 3.0
 				b.phase = "back"
 		"fire":
-			b.crouch = false
+			var hold_low := b.cover_ob != null and _low_cover(b.cover_ob) and Vector2(b.peek_pt.x - b.cover_pt.x, b.peek_pt.y - b.cover_pt.y).length() < 0.35
+			b.crouch = hold_low
 			b.phase_t += dt
 			b.lost_t = 0.0 if seen else b.lost_t + dt
 			b.strafe_t -= dt
 			if b.strafe_t <= 0.0:
 				b.strafe_dir = -b.strafe_dir
 				b.strafe_t = randf_range(0.5, 0.9)
+			if hold_low:
+				b.node.rotation.y = _damp_angle(b.node.rotation.y, want, 10.0, dt)
+				_bot_shoot_gate(b, dt, allowed, true)
+				var done_low := b.burst_left <= 0 and b.rounds <= 0 and b.shot_t <= 0.0
+				if done_low or b.hurt_t > 0.0 or b.lost_t > 0.5 or b.phase_t > 3.0:
+					b.phase = "back"
+					b.stuck_t = 0.0
+					b.stuck_from = Vector2(b.node.position.x, b.node.position.z)
+				return
 			# strafe along the cover edge, but only on the side where the player stays in sight
 			var pl := Vector2(pos.x - b.node.position.x, pos.z - b.node.position.z).normalized()
 			var perp := Vector2(-pl.y, pl.x)
@@ -2678,7 +2787,7 @@ func _enemy_fire(b: Bot) -> void:
 	var y := b.node.rotation.y + randf_range(-err, err)
 	var origin := Vector3(b.node.position.x, 0.72 if b.crouch else 1.15, b.node.position.z)
 	var d := Vector3(sin(y), -0.02, cos(y)).normalized()
-	var wd := _world_hit(origin, d, 28.0)
+	var wd := _bullet_hit(origin, d, 28.0, _is_low())
 	var ph := _player_hit_test(origin, d, wd)
 	var end: Vector3
 	if ph >= 0.0:
@@ -2686,6 +2795,8 @@ func _enemy_fire(b: Bot) -> void:
 		_hurt_player(6.0)
 	else:
 		end = origin + d * minf(wd, 20.0)
+		if _is_low():
+			end.y = minf(end.y, 0.9)
 	_spawn_tracer(b.node.muzzle.global_position, end)
 	_spawn_spark(end)
 	var dist := Vector2(b.node.position.x - pos.x, b.node.position.z - pos.z).length()
