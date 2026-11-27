@@ -11,6 +11,7 @@ signal tune_copy
 signal tune_paste
 signal tune_reset
 signal tune_enemy_toggle
+signal tune_preset(name: String)
 signal resume
 signal retry
 signal restart
@@ -46,6 +47,14 @@ var tune_tabs: Array[Button] = []
 var tune_text: TextEdit
 var tune_status: Label
 var tune_enemy_btn: Button
+var preset_btns := {}
+var fx: FxLayer
+var slot_back: ColorRect
+var mag_bar: MagBar
+var toast_label: Label
+var toast_t := 0.0
+var btn_mode := true
+var hud_bottom := true
 var pause_mode_btn: Button
 var arena_mode := false
 var opt_val := {}
@@ -53,7 +62,21 @@ var touch_mode := false
 var _syncing := false
 
 
+class MagBar extends Control:
+	var total := 30
+	var cur := 30
+
+	func _draw() -> void:
+		var n := maxi(total, 1)
+		var gap := 2.0
+		var w := (size.x - gap * (n - 1)) / n
+		for i in n:
+			var on := i < cur
+			draw_rect(Rect2(i * (w + gap), 0, w, size.y), Color(1.0, 0.82, 0.38, 0.95) if on else Color(1, 1, 1, 0.14))
+
+
 class StickPad extends Control:
+	var show_right := true
 	var centers: Array[Vector2] = [Vector2.ZERO, Vector2.ZERO]
 	var knobs: Array[Vector2] = [Vector2.ZERO, Vector2.ZERO]
 	var active: Array[bool] = [false, false]
@@ -61,6 +84,8 @@ class StickPad extends Control:
 
 	func _draw() -> void:
 		for i in 2:
+			if i == 1 and not show_right:
+				continue
 			draw_circle(centers[i], r, Color(0, 0, 0, 0.16))
 			draw_arc(centers[i], r, 0, TAU, 48, Color(1, 1, 1, 0.38), 2.5, true)
 			if i == 1:
@@ -105,6 +130,8 @@ func _build_hud() -> void:
 	hud.set_anchors_preset(Control.PRESET_FULL_RECT)
 	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(hud)
+	fx = FxLayer.new()
+	hud.add_child(fx)
 	obj_label = _label(hud, "Reach the north extract", 20, Color(1, 0.9, 0.6))
 	hp_back = ColorRect.new()
 	hp_back.color = Color(0, 0, 0, 0.5)
@@ -114,6 +141,13 @@ func _build_hud() -> void:
 	hp_fill.color = Color(0.49, 0.73, 0.35)
 	hp_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud.add_child(hp_fill)
+	slot_back = ColorRect.new()
+	slot_back.color = Color(0.04, 0.05, 0.05, 0.55)
+	slot_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(slot_back)
+	mag_bar = MagBar.new()
+	mag_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud.add_child(mag_bar)
 	ammo_label = _label(hud, "30 / 180", 34)
 	wep_label = _label(hud, "CARBINE", 18, Color(0.85, 0.85, 0.8))
 	low_label = _label(hud, "LOW AMMO", 22, Color(1, 0.45, 0.35))
@@ -126,7 +160,9 @@ func _build_hud() -> void:
 	sticks.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	sticks.r = STICK_R
 	hud.add_child(sticks)
-	for spec in [["vault", "VAULT", 92], ["slide", "SLIDE", 92], ["swap", "SWAP", 78], ["reload", "RLD", 64], ["pause", "II", 56], ["view", "VIEW", 56], ["tune", "TUNE", 56]]:
+	toast_label = _label(hud, "", 24, Color(1, 0.9, 0.55))
+	toast_label.visible = false
+	for spec in [["fire", "FIRE", 150], ["vault", "VAULT", 92], ["slide", "SLIDE", 92], ["swap", "SWAP", 78], ["reload", "RLD", 64], ["sprint", "RUN", 70], ["grenade", "GRN", 70], ["pause", "II", 56], ["view", "VIEW", 56], ["tune", "TUNE", 56]]:
 		tbtns[spec[0]] = _tbtn(spec[1], spec[2])
 
 
@@ -202,7 +238,7 @@ func _button(parent: Control, text: String, cb: Callable) -> Button:
 
 
 func _build_start() -> void:
-	var r := _screen("PIPE HITTERS  " + TuneDefs.VERSION, "Left stick moves (camera-relative). Right stick aims; push past the ring to fire. Swipe empty space to orbit, pinch to zoom. TUNE opens the tuning panel.")
+	var r := _screen("PIPE HITTERS  " + TuneDefs.VERSION, "Left stick moves. Auto-lock picks the nearest enemy; hold FIRE to shoot. RUN sprints. TUNE opens the tuning panel (Snappy / Classic presets).")
 	start_panel = r[0]
 	var a := _button(r[1], "Tuning Arena", func() -> void: deploy_arena.emit())
 	a.custom_minimum_size = Vector2(300, 64)
@@ -288,6 +324,18 @@ func sync(settings: Dictionary) -> void:
 		var sl: HSlider = tune_sliders[k]
 		sl.value = float(settings[k])
 		(tune_vals[k] as Label).text = fmt_value(sl.value, sl.step)
+	for k in preset_btns.keys():
+		(preset_btns[k] as Button).button_pressed = (settings.get("preset", "snappy") == k)
+	var nb: bool = float(settings.get("twin_stick", 0.0)) < 0.5
+	var hb: bool = float(settings.get("hud_bottom", 1.0)) > 0.5
+	if nb != btn_mode or hb != hud_bottom:
+		btn_mode = nb
+		hud_bottom = hb
+		_layout()
+	fx.show_numbers = float(settings.get("dmg_nums", 1.0)) > 0.5
+	fx.show_tags = float(settings.get("tags", 1.0)) > 0.5
+	fx.show_arrows = float(settings.get("arrows", 1.0)) > 0.5
+	fx.show_brackets = float(settings.get("brackets", 1.0)) > 0.5
 	if tune_enemy_btn != null:
 		tune_enemy_btn.text = "Enemy: " + ("Active AI (tap for Static)" if settings["enemy_active"] else "Static (tap for Active AI)")
 	_syncing = false
@@ -325,29 +373,62 @@ func _layout() -> void:
 	sticks.centers[0] = Vector2(lx, ly)
 	sticks.centers[1] = Vector2(s.x - lx, ly)
 	sticks.visible = touch_mode
+	sticks.show_right = not btn_mode
 	var rc := sticks.centers[1]
-	_place_btn("slide", rc + Vector2(-150, 10))
-	_place_btn("vault", rc + Vector2(-112, -112))
-	_place_btn("swap", rc + Vector2(8, -150))
-	_place_btn("reload", rc + Vector2(-210, -60))
-	_place_btn("pause", Vector2(s.x - 40, 40))
-	_place_btn("view", Vector2(s.x - 106, 40))
-	_place_btn("tune", Vector2(s.x - 172, 40))
+	if btn_mode:
+		var f := Vector2(s.x - 150, s.y - 170)
+		_place_btn("fire", f)
+		_place_btn("sprint", f + Vector2(-127, 46))
+		_place_btn("slide", f + Vector2(-127, -46))
+		_place_btn("vault", f + Vector2(-67, -117))
+		_place_btn("reload", f + Vector2(23, -133))
+		_place_btn("grenade", f + Vector2(103, -87))
+		_place_btn("swap", f + Vector2(-190, -125))
+	else:
+		_place_btn("slide", rc + Vector2(-150, 10))
+		_place_btn("vault", rc + Vector2(-112, -112))
+		_place_btn("swap", rc + Vector2(8, -150))
+		_place_btn("reload", rc + Vector2(-210, -60))
+	_place_btn("pause", Vector2(40, 40) if hud_bottom else Vector2(s.x - 40, 40))
+	_place_btn("view", Vector2(s.x - 40, 40) if hud_bottom else Vector2(s.x - 106, 40))
+	_place_btn("tune", Vector2(s.x - 106, 40) if hud_bottom else Vector2(s.x - 172, 40))
 	(tbtns["swap"] as Control).visible = touch_mode and not arena_mode
 	var tw := minf(820.0, s.x * 0.64)
 	tune_panel.position = Vector2(s.x - tw, 0)
 	tune_panel.size = Vector2(tw, s.y)
 	for k in ["slide", "vault", "reload"]:
 		(tbtns[k] as Control).visible = touch_mode
-	obj_label.position = Vector2(16, 12)
-	hp_back.position = Vector2(s.x * 0.5 - 130, 16)
-	hp_back.size = Vector2(260, 14)
+	for k in ["fire", "sprint", "grenade"]:
+		(tbtns[k] as Control).visible = touch_mode and btn_mode
+	obj_label.position = Vector2(84, 12) if hud_bottom else Vector2(16, 12)
+	if hud_bottom:
+		var cx := s.x * 0.5
+		hp_back.position = Vector2(cx - 170, s.y - 112)
+		hp_back.size = Vector2(340, 16)
+		slot_back.position = Vector2(cx - 170, s.y - 88)
+		slot_back.size = Vector2(340, 74)
+		slot_back.visible = true
+		mag_bar.position = Vector2(cx - 160, s.y - 30)
+		mag_bar.size = Vector2(320, 10)
+		mag_bar.visible = true
+		wep_label.position = Vector2(cx - 160, s.y - 86)
+		ammo_label.position = Vector2(cx + 160 - 130, s.y - 84)
+		ammo_label.size = Vector2(130, 40)
+		ammo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		low_label.position = Vector2(cx - 52, s.y - 146)
+	else:
+		hp_back.position = Vector2(s.x * 0.5 - 130, 16)
+		hp_back.size = Vector2(260, 14)
+		slot_back.visible = false
+		mag_bar.visible = false
+		ammo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		ammo_label.position = Vector2(s.x * 0.5 - 70, s.y - 74) if not touch_mode else Vector2(s.x * 0.5 - 70, s.y - 70)
+		wep_label.position = ammo_label.position + Vector2(4, -20)
+		low_label.position = Vector2(s.x * 0.5 - 52, s.y - 112)
 	hp_fill.position = hp_back.position + Vector2(2, 2)
-	ammo_label.position = Vector2(s.x * 0.5 - 70, s.y - 74) if not touch_mode else Vector2(s.x * 0.5 - 70, s.y - 70)
-	wep_label.position = ammo_label.position + Vector2(4, -20)
-	low_label.position = Vector2(s.x * 0.5 - 52, s.y - 112)
 	cover_label.position = Vector2(s.x * 0.5 - 36, 40)
 	reload_label.position = Vector2(s.x * 0.5 - 62, s.y * 0.5 + 50)
+	toast_label.position = Vector2(s.x * 0.5 - 150, s.y * 0.5 - 80)
 	hint_label.size = Vector2(s.x, 40)
 	hint_label.position = Vector2(0, s.y - 150)
 	hint_label.visible = not touch_mode
@@ -382,8 +463,29 @@ func flash_button(k: String) -> void:
 
 
 func set_hp(frac: float) -> void:
-	hp_fill.size = Vector2(256.0 * clampf(frac, 0.0, 1.0), 10)
+	hp_fill.size = Vector2((hp_back.size.x - 4.0) * clampf(frac, 0.0, 1.0), hp_back.size.y - 4.0)
 	hp_fill.color = Color(0.49, 0.73, 0.35) if frac > 0.35 else Color(0.85, 0.36, 0.29)
+
+
+func set_mag(cur: int, total: int) -> void:
+	if mag_bar.cur != cur or mag_bar.total != total:
+		mag_bar.cur = cur
+		mag_bar.total = total
+		mag_bar.queue_redraw()
+
+
+func toast(text: String) -> void:
+	toast_label.text = text
+	toast_label.visible = true
+	toast_t = 1.2
+
+
+func tick(dt: float) -> void:
+	if toast_t > 0.0:
+		toast_t -= dt
+		toast_label.modulate.a = clampf(toast_t / 0.4, 0.0, 1.0)
+		if toast_t <= 0.0:
+			toast_label.visible = false
 
 
 func set_arena(on: bool) -> void:
@@ -448,10 +550,12 @@ func _tune_row(parent: Control, d: Dictionary) -> void:
 	l.custom_minimum_size = Vector2(230, 0)
 	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(l)
+	var toggle: bool = d.get("toggle", false)
 	var minus := Button.new()
 	minus.text = "-"
 	minus.custom_minimum_size = Vector2(58, 58)
-	row.add_child(minus)
+	if not toggle:
+		row.add_child(minus)
 	var sl := HSlider.new()
 	sl.min_value = d["min"]
 	sl.max_value = d["max"]
@@ -464,7 +568,16 @@ func _tune_row(parent: Control, d: Dictionary) -> void:
 	var plus := Button.new()
 	plus.text = "+"
 	plus.custom_minimum_size = Vector2(58, 58)
-	row.add_child(plus)
+	if not toggle:
+		row.add_child(plus)
+	var tbtn: Button = null
+	if toggle:
+		sl.visible = false
+		tbtn = Button.new()
+		tbtn.custom_minimum_size = Vector2(200, 58)
+		tbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tbtn.pressed.connect(func() -> void: sl.value = 0.0 if sl.value > 0.5 else 1.0)
+		row.add_child(tbtn)
 	var v := Label.new()
 	v.custom_minimum_size = Vector2(92, 0)
 	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -472,8 +585,14 @@ func _tune_row(parent: Control, d: Dictionary) -> void:
 	v.add_theme_color_override("font_color", Color(1, 0.86, 0.5))
 	v.text = fmt_value(sl.value, step)
 	row.add_child(v)
+	if toggle:
+		v.text = "On" if sl.value > 0.5 else "Off"
+		tbtn.text = "Tap to turn " + ("off" if sl.value > 0.5 else "on")
 	sl.value_changed.connect(func(val: float) -> void:
 		v.text = fmt_value(val, step)
+		if toggle:
+			v.text = "On" if val > 0.5 else "Off"
+			tbtn.text = "Tap to turn " + ("off" if val > 0.5 else "on")
 		if not _syncing:
 			setting_changed.emit(key, val))
 	minus.pressed.connect(func() -> void: sl.value = sl.value - step)
@@ -510,11 +629,20 @@ func _build_tune() -> void:
 	var head := HBoxContainer.new()
 	vb.add_child(head)
 	var t := Label.new()
-	t.text = "TUNING  " + TuneDefs.VERSION
+	t.text = "TUNE " + TuneDefs.VERSION
 	t.add_theme_color_override("font_color", Color(0.95, 0.82, 0.42))
 	t.add_theme_font_size_override("font_size", 30)
 	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(t)
+	for pn in ["snappy", "classic"]:
+		var pb := Button.new()
+		pb.text = pn.capitalize()
+		pb.toggle_mode = true
+		pb.custom_minimum_size = Vector2(124, 56)
+		var pname: String = pn
+		pb.pressed.connect(func() -> void: tune_preset.emit(pname))
+		head.add_child(pb)
+		preset_btns[pn] = pb
 	var close := Button.new()
 	close.text = "Close"
 	close.custom_minimum_size = Vector2(150, 56)
@@ -532,7 +660,7 @@ func _build_tune() -> void:
 	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(stack)
 	var names: Array[String] = []
-	for g in TuneDefs.GROUPS:
+	for g in TuneDefs.groups():
 		names.append(g["name"])
 		var page := VBoxContainer.new()
 		page.add_theme_constant_override("separation", 10)

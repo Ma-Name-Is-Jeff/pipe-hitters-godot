@@ -253,8 +253,9 @@ func _marker(parent: Node3D, p: Vector3) -> Node3D:
 	return n
 
 
-func set_flash(f: float) -> void:
-	var c := base_emission + Color(0.45, 0.32, 0.16) * clampf(f / 0.12, 0.0, 1.0)
+func set_flash(f: float, red: float = 0.0) -> void:
+	var k := clampf(f / 0.12, 0.0, 1.0)
+	var c := base_emission + Color(0.45, 0.32, 0.16) * k * (1.0 - red) + Color(1.5, 0.06, 0.04) * k * red
 	for m in mats:
 		if not glow_mats.has(m):
 			m.emission = c

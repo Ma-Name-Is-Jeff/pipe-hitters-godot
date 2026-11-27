@@ -36,9 +36,12 @@ for (const st of steps.split(";").filter(Boolean)) {
   else if (k === "tap") { await touch("touchStart", [[n[0], n[1]]]); await sleep(80); await touch("touchEnd", []); }
   else if (k === "hold") { await touch("touchStart", [[n[0], n[1]]]); await sleep(n[2]); await touch("touchEnd", []); }
   else if (k === "drag") { const [x1, y1, x2, y2, ms] = n; await touch("touchStart", [[x1, y1]]); for (let i = 1; i <= 8; i++) { await touch("touchMove", [[x1 + (x2 - x1) * i / 8, y1 + (y2 - y1) * i / 8]]); await sleep(ms / 8); } await sleep(150); await touch("touchEnd", []); }
-  else if (k === "twin") { // left stick drag held while right-stick drag: x1,y1,x2,y2,rx1,ry1,rx2,ry2,ms
-    const [x1, y1, x2, y2, a1, b1, a2, b2, ms] = n; await touch("touchStart", [[x1, y1], [a1, b1]]);
-    await touch("touchMove", [[x2, y2], [a2, b2]]); await sleep(ms); await touch("touchEnd", []); }
+  else if (k === "twin") { // two fingers: x1,y1,x2,y2 (moving stick), a1,b1,a2,b2 (second finger), ms[,shotName]
+    const [x1, y1, x2, y2, a1, b1, a2, b2, ms] = n; const nm = a.split(",")[9];
+    await touch("touchStart", [[x1, y1], [a1, b1]]);
+    await touch("touchMove", [[x2, y2], [a2, b2]]);
+    if (nm) { const names = nm.split("|"); for (let i = 0; i < names.length; i++) { await sleep(ms / names.length); await shot(names[i]); } } else await sleep(ms);
+    await touch("touchEnd", []); }
 }
 console.log("LOGS:\n" + logs.slice(-15).join("\n"));
 console.log("ERRORS(" + errors.length + "):\n" + errors.join("\n"));

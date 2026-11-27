@@ -138,7 +138,7 @@ func run() -> void:
 	var snap: Dictionary = main.tuning_values().duplicate()
 	ok("copy fills text box with JSON", json.length() > 50 and typeof(JSON.parse_string(json)) == TYPE_DICTIONARY)
 	main.reset_tuning()
-	ok("reset restores defaults", is_equal_approx(main._walk(), 5.6) and main.settings["enemy_active"] == false)
+	ok("reset restores defaults", is_equal_approx(main._walk(), 6.3) and main.settings["enemy_active"] == false)
 	ui.tune_text.text = json
 	ui.tune_paste.emit()
 	var back: Dictionary = main.tuning_values()

@@ -13,7 +13,9 @@ const RESPAWN_S := 2.5
 const VERSION := TuneDefs.VERSION
 const EXTRACT := Vector3(0, 0, -88)
 const EXTRACT_R := 4.6
-const AIM_SPEED := 0.5
+const BOT_NAMES := ["Pike", "Rook", "Vance", "Moss", "Dray", "Tull", "Kerr", "Voss", "Hale", "Brandt"]
+const BODY_LEN := 1.8
+const TRACER_LEN := 2.6
 const VIEW_PITCH_MIN := -0.3141593
 const VIEW_PITCH_MAX := 0.2094395
 const STICK_HIT := 120.0
@@ -44,6 +46,7 @@ class Bot:
 	var prev := Vector2.ZERO
 	var bar_bg: MeshInstance3D
 	var bar_fill: MeshInstance3D
+	var label := "Rook"
 
 
 class Mate:
@@ -70,7 +73,7 @@ class Pickup:
 	var bob := 0.0
 
 
-var settings := {"invert_move": false, "landscape": false, "fullscreen": false, "aim_sens": 70.0, "assist": 70.0, "volume": 70.0, "facing": "follow", "zoom": 0.0}
+var settings := {"invert_move": false, "landscape": false, "fullscreen": false, "aim_sens": 70.0, "assist": 70.0, "volume": 70.0, "facing": "follow", "zoom": 0.0, "preset": "snappy", "tune_ver": "v1b"}
 
 var level: Level
 var arena_level: Level
@@ -163,7 +166,17 @@ var pinch_dist := 0.0
 # FX.
 var tracers: Array = []
 var sparks: Array = []
-var muzzle_flash: MeshInstance3D
+var muzzle_flash: Node3D
+var laser: MeshInstance3D
+var decals: Array[MeshInstance3D] = []
+var decal_i := 0
+var twitch := 0.0
+var lock_target: Bot = null
+var fire_held := false
+var fire_id := -1
+var sprint_held := false
+var sprint_id := -1
+var vig_hit := 0.0
 var muzzle_t := 0.0
 var aim_line: MeshInstance3D
 var aim_line_mat: StandardMaterial3D
@@ -207,13 +220,18 @@ func _ready() -> void:
 	ui.tune_paste.connect(_tune_paste)
 	ui.tune_reset.connect(_tune_reset)
 	ui.tune_enemy_toggle.connect(_tune_enemy_toggle)
+	ui.tune_preset.connect(func(n: String) -> void:
+		apply_preset(n)
+		ui.tune_status.text = "%s preset applied." % n.capitalize())
 	ui.resume.connect(func() -> void: _set_paused(false))
 	ui.retry.connect(_retry)
 	ui.restart.connect(_retry)
 	ui.reset_view.connect(_reset_view)
 	ui.setting_changed.connect(_on_setting)
 	ui.hud.visible = false
+	ui.fx.camera = camera
 	ui.sync(settings)
+	_apply_bars()
 	_apply_volume()
 	_set_mode(false)
 	_reset_mission()
@@ -290,6 +308,7 @@ func _build_bots(specs: Array, out: Array) -> void:
 	bar_bg_mat.billboard_keep_scale = true
 	for s in specs:
 		var b := Bot.new()
+		b.label = BOT_NAMES[out.size() % BOT_NAMES.size()]
 		b.node = Soldier.new()
 		b.node.setup(Color8(128, 104, 78), Color8(96, 80, 62), Color8(110, 70, 46), Color8(92, 72, 52), Color8(70, 52, 38), Color8(214, 186, 156), Color8(40, 34, 30), Color8(70, 56, 44), Color8(255, 60, 40), Color(0.11, 0.05, 0.02))
 		add_child(b.node)
@@ -463,21 +482,21 @@ func _build_pickups() -> void:
 
 
 func _build_fx() -> void:
-	var tm := _flat_mat(Color(1.0, 0.85, 0.5))
+	var tm := _flat_mat(Color(1.0, 0.96, 0.7))
 	var tb := BoxMesh.new()
-	tb.size = Vector3(0.035, 0.035, 1.0)
-	for i in 24:
+	tb.size = Vector3(0.07, 0.07, 1.0)
+	for i in 32:
 		var m := MeshInstance3D.new()
 		m.mesh = tb
 		m.material_override = tm
 		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		m.visible = false
 		add_child(m)
-		tracers.append({"node": m, "life": 0.0})
-	var sm := _flat_mat(Color(0.95, 0.82, 0.55))
+		tracers.append({"node": m, "life": 0.0, "a": Vector3.ZERO, "dir": Vector3.FORWARD, "dist": 0.0, "t": 0.0, "speed": 160.0})
+	var sm := _flat_mat(Color(1.0, 0.9, 0.6))
 	var sb := BoxMesh.new()
 	sb.size = Vector3(0.09, 0.09, 0.09)
-	for i in 18:
+	for i in 60:
 		var m := MeshInstance3D.new()
 		m.mesh = sb
 		m.material_override = sm
@@ -485,15 +504,52 @@ func _build_fx() -> void:
 		m.visible = false
 		add_child(m)
 		sparks.append({"node": m, "life": 0.0, "v": Vector3.ZERO})
-	muzzle_flash = MeshInstance3D.new()
+	muzzle_flash = Node3D.new()
+	var fmat := _flat_mat(Color(1.0, 0.93, 0.6))
+	var arm := BoxMesh.new()
+	arm.size = Vector3(1.0, 0.03, 0.09)
+	for i in 4:
+		var m := MeshInstance3D.new()
+		m.mesh = arm
+		m.material_override = fmat
+		m.rotation.y = i * PI / 4.0
+		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		muzzle_flash.add_child(m)
+	var core := MeshInstance3D.new()
 	var fs := SphereMesh.new()
-	fs.radius = 0.1
-	fs.height = 0.2
-	muzzle_flash.mesh = fs
-	muzzle_flash.material_override = _flat_mat(Color(1.0, 0.86, 0.45))
-	muzzle_flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	fs.radius = 0.12
+	fs.height = 0.24
+	core.mesh = fs
+	core.material_override = _flat_mat(Color(1.0, 1.0, 0.9))
+	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	muzzle_flash.add_child(core)
 	muzzle_flash.visible = false
 	add_child(muzzle_flash)
+	var lm := _flat_mat(Color(1.0, 0.22, 0.16, 0.8))
+	lm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var lb := BoxMesh.new()
+	lb.size = Vector3(0.022, 0.022, 1.0)
+	laser = MeshInstance3D.new()
+	laser.mesh = lb
+	laser.material_override = lm
+	laser.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	laser.visible = false
+	add_child(laser)
+	var dm := _flat_mat(Color(0.02, 0.02, 0.025, 0.8))
+	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var dc := CylinderMesh.new()
+	dc.top_radius = 0.85
+	dc.bottom_radius = 0.85
+	dc.height = 0.01
+	dc.radial_segments = 16
+	for i in 8:
+		var m := MeshInstance3D.new()
+		m.mesh = dc
+		m.material_override = dm
+		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		m.visible = false
+		add_child(m)
+		decals.append(m)
 	aim_line_mat = _flat_mat(Color(1.0, 0.88, 0.54, 0.6))
 	aim_line_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	aim_line_mat.no_depth_test = false
@@ -518,10 +574,40 @@ func _build_fx() -> void:
 	add_child(aim_mark)
 
 
+func _add_decal(x: float, z: float) -> void:
+	var d := decals[decal_i % decals.size()]
+	decal_i += 1
+	d.position = Vector3(x, 0.03, z)
+	d.rotation.y = randf() * TAU
+	d.scale = Vector3(randf_range(0.9, 1.25), 1, randf_range(0.65, 0.95))
+	d.visible = true
+
+
+func _clear_decals() -> void:
+	for d in decals:
+		d.visible = false
+
+
 # ---------- tuning accessors ----------
 
 func _t(k: String) -> float:
 	return float(settings[k])
+
+
+func _tb(k: String) -> bool:
+	return float(settings[k]) > 0.5
+
+
+func _btn_mode() -> bool:
+	return not _tb("twin_stick")
+
+
+func _north_up() -> bool:
+	return _tb("cam_northup")
+
+
+func _range() -> float:
+	return _t("lock_range") if _btn_mode() else AIM_RANGE
 
 
 func _walk() -> float: return _t("move_speed")
@@ -553,8 +639,13 @@ func _enemy_hp() -> int:
 func _load_settings() -> void:
 	var cf := ConfigFile.new()
 	if cf.load(SETTINGS_PATH) == OK:
+		var fresh: bool = cf.get_value("s", "tune_ver", "") == TuneDefs.VERSION
+		var tune_keys := TuneDefs.defaults()
 		for k in settings.keys():
+			if not fresh and tune_keys.has(k):
+				continue  # older saved tuning (v1a) -> start from the Snappy defaults
 			settings[k] = cf.get_value("s", k, settings[k])
+		settings["tune_ver"] = TuneDefs.VERSION
 	for it in TuneDefs.all_items():
 		settings[it["key"]] = TuneDefs.clamp_value(it["key"], float(settings[it["key"]]))
 	settings["enemy_active"] = bool(settings["enemy_active"])
@@ -586,8 +677,17 @@ func _on_setting(key: String, value: Variant) -> void:
 			_apply_volume()
 		_:
 			settings[key] = TuneDefs.clamp_value(key, float(value))
+			settings["preset"] = "custom"
 			if key == "enemy_hp":
 				_apply_enemy_hp()
+			elif key == "bars":
+				_apply_bars()
+			elif key == "cam_northup" and _north_up():
+				view_yaw = 0.0
+			elif key == "twin_stick":
+				_clear_touches()
+				fire_held = false
+				sprint_held = false
 	_queue_save()
 	ui.sync(settings)
 
@@ -604,6 +704,31 @@ func _apply_enemy_hp() -> void:
 		b.hp = b.max_hp
 		b.bar_fill.scale = Vector3.ONE
 		(b.bar_fill.material_override as StandardMaterial3D).albedo_color = Color(0.49, 0.73, 0.35)
+
+
+func _apply_bars() -> void:
+	var on := _tb("bars")
+	for b in compound_bots + arena_bots:
+		var show := on and b.state != "down"
+		b.bar_bg.visible = show
+		b.bar_fill.visible = show
+
+
+## Apply a named preset ("snappy" or "classic") to every tuning value.
+func apply_preset(name: String) -> void:
+	var vals := TuneDefs.preset_values(name)
+	for k in vals.keys():
+		settings[k] = vals[k]
+	settings["preset"] = name
+	zoom_show = float(settings["zoom"])
+	if _north_up():
+		view_yaw = 0.0
+	_clear_touches()
+	fire_held = false
+	sprint_held = false
+	_apply_bars()
+	_save_settings()
+	ui.sync(settings)
 
 
 # ---------- tuning panel actions ----------
@@ -644,7 +769,9 @@ func apply_tuning_json(text: String) -> int:
 		else:
 			continue
 		n += 1
+	settings["preset"] = "custom"
 	_apply_enemy_hp()
+	_apply_bars()
 	_apply_volume()
 	zoom_show = float(settings["zoom"])
 	_save_settings()
@@ -662,13 +789,9 @@ func _tune_paste() -> void:
 
 
 func reset_tuning() -> void:
-	var defs := TuneDefs.defaults()
-	for k in defs.keys():
-		settings[k] = defs[k]
+	settings["enemy_active"] = false
+	apply_preset("snappy")
 	_apply_enemy_hp()
-	zoom_show = float(settings["zoom"])
-	_save_settings()
-	ui.sync(settings)
 
 
 func _tune_reset() -> void:
@@ -775,6 +898,7 @@ func _set_mode(arena: bool) -> void:
 	for p in pickups:
 		p.node.visible = not arena and p.live
 	ui.set_arena(arena)
+	_clear_decals()
 
 
 func _retry() -> void:
@@ -824,11 +948,22 @@ func _clear_touches() -> void:
 	look_held = false
 	pinch_a = -1
 	pinch_b = -1
+	fire_id = -1
+	fire_held = false
+	sprint_id = -1
+	sprint_held = false
 	_update_stick_draw()
 
 
 func _reset_mission() -> void:
 	_clear_touches()
+	_clear_decals()
+	fire_held = false
+	sprint_held = false
+	lock_target = null
+	twitch = 0.0
+	vig_hit = 0.0
+	ui.fx.clear_all()
 	view_yaw = 0.0
 	view_pitch = 0.0
 	pos = ARENA_START if arena_mode else START
@@ -892,8 +1027,8 @@ func _respawn_bot(b: Bot, at: Vector2) -> void:
 	b.prev = at
 	b.spd = 0.0
 	b.node.set_flash(0.0)
-	b.bar_bg.visible = true
-	b.bar_fill.visible = true
+	b.bar_bg.visible = _tb("bars")
+	b.bar_fill.visible = _tb("bars")
 	b.bar_fill.scale = Vector3.ONE
 	(b.bar_fill.material_override as StandardMaterial3D).albedo_color = Color(0.49, 0.73, 0.35)
 	b.node.k_down = 0.0
@@ -1012,6 +1147,15 @@ func _on_mouse_button(e: InputEventMouseButton) -> void:
 	mouse_pos = e.position
 	if e.pressed and e.button_index == MOUSE_BUTTON_LEFT and _game_active():
 		var b := ui.touch_button_at(e.position)
+		if b == "fire" or b == "sprint":
+			if b == "fire":
+				fire_held = true
+				fire_id = -2
+			else:
+				sprint_held = true
+				sprint_id = -2
+			get_viewport().set_input_as_handled()
+			return
 		if b != "":
 			_touch_button(b)
 			get_viewport().set_input_as_handled()
@@ -1019,10 +1163,23 @@ func _on_mouse_button(e: InputEventMouseButton) -> void:
 	if not _game_active():
 		if not e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
 			mouse_down = false
+			if fire_id == -2:
+				fire_held = false
+				fire_id = -1
+			if sprint_id == -2:
+				sprint_held = false
+				sprint_id = -1
 		return
 	match e.button_index:
 		MOUSE_BUTTON_LEFT:
 			mouse_down = e.pressed
+			if not e.pressed:
+				if fire_id == -2:
+					fire_held = false
+					fire_id = -1
+				if sprint_id == -2:
+					sprint_held = false
+					sprint_id = -1
 		MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE:
 			if e.pressed:
 				look_held = true
@@ -1056,6 +1213,9 @@ func _touch_button(b: String) -> void:
 			_set_paused(true)
 		"view":
 			_reset_view()
+		"grenade":
+			ui.toast("Grenade: coming soon")
+			synth.play("empty", 0.5)
 
 
 func _on_touch(e: InputEventScreenTouch) -> void:
@@ -1065,6 +1225,16 @@ func _on_touch(e: InputEventScreenTouch) -> void:
 		if not _game_active():
 			return
 		var b := ui.touch_button_at(p)
+		if b == "fire":
+			fire_id = e.index
+			fire_held = true
+			ui.flash_button("fire")
+			return
+		if b == "sprint":
+			sprint_id = e.index
+			sprint_held = true
+			ui.flash_button("sprint")
+			return
 		if b != "":
 			_touch_button(b)
 			return
@@ -1072,7 +1242,7 @@ func _on_touch(e: InputEventScreenTouch) -> void:
 			move_id = e.index
 			_set_stick(0, p)
 			return
-		if aim_id < 0 and p.distance_to(ui.stick_center(1)) < STICK_HIT:
+		if aim_id < 0 and not _btn_mode() and p.distance_to(ui.stick_center(1)) < STICK_HIT:
 			aim_id = e.index
 			_set_stick(1, p)
 			return
@@ -1129,6 +1299,12 @@ func _update_stick_draw() -> void:
 
 
 func _end_touch(idx: int) -> void:
+	if idx == fire_id:
+		fire_id = -1
+		fire_held = false
+	if idx == sprint_id:
+		sprint_id = -1
+		sprint_held = false
 	if idx == move_id:
 		move_id = -1
 		move_v = Vector2.ZERO
@@ -1184,6 +1360,8 @@ func _begin_pinch(a: int, pa: Vector2, b: int, pb: Vector2) -> void:
 
 
 func _apply_orbit(d: Vector2) -> void:
+	if _north_up():
+		return
 	var w := maxf(ui.screen_size().x, 1.0)
 	view_yaw -= d.x * 1.35 * PI / w
 	view_pitch = clampf(view_pitch + d.y * 0.7 / w, VIEW_PITCH_MIN, VIEW_PITCH_MAX)
@@ -1191,6 +1369,10 @@ func _apply_orbit(d: Vector2) -> void:
 
 
 func _reset_view() -> void:
+	if _north_up():
+		view_yaw = 0.0
+		view_pitch = 0.0
+		return
 	view_yaw = yaw + PI
 	view_pitch = 0.0
 
@@ -1264,6 +1446,8 @@ func _sprinting(w: Vector3) -> bool:
 	if stance != "stand":
 		return false
 	var key := Input.is_physical_key_pressed(KEY_SHIFT)
+	if _btn_mode():
+		return (key or sprint_held) and w.y > 0.15
 	var mob := touch_mode and w.y > 0.85
 	return (key or mob) and w.y > 0.15
 
@@ -1388,6 +1572,8 @@ func _near_low_cover(x: float, z: float, within: float) -> Obstacle:
 # ---------- player ----------
 
 func _is_aiming() -> bool:
+	if _btn_mode():
+		return lock_target != null or fire_held or mouse_down
 	if touch_mode:
 		return aim_mag > AIM_DEAD
 	return mouse_down or assist_target != null
@@ -1476,7 +1662,52 @@ func _find_assist() -> Bot:
 	return best
 
 
+## Nearest living enemy in range with a clear line, or null.
+func _find_lock() -> Bot:
+	var best: Bot = null
+	var bd := 1e9
+	var rng := _range()
+	for b in bots:
+		if b.state == "down":
+			continue
+		var dx := b.node.position.x - pos.x
+		var dz := b.node.position.z - pos.z
+		var d := sqrt(dx * dx + dz * dz)
+		if d > rng or d < 0.4:
+			continue
+		if d >= bd:
+			continue
+		if _los_blocked(pos.x, pos.z, b.node.position.x, b.node.position.z):
+			continue
+		bd = d
+		best = b
+	return best
+
+
+func _update_look_snappy(dt: float) -> void:
+	lock_target = _find_lock()
+	assist_target = lock_target
+	if lock_target != null:
+		var want := atan2(lock_target.node.position.x - pos.x, lock_target.node.position.z - pos.z)
+		var rate := _t("lock_turn")
+		if rate >= 99.5:
+			yaw = want
+		else:
+			yaw = _move_toward_angle(yaw, want, rate * 0.2 * dt)
+		aim_point = Vector3(lock_target.node.position.x, 0.03, lock_target.node.position.z)
+	else:
+		var w := _wish()
+		if w.y > 0.1 and stance == "stand":
+			yaw = _damp_angle(yaw, atan2(w.x, w.z), 18.0, dt)
+		aim_point = pos + Vector3(sin(yaw), 0, cos(yaw)) * 10.0
+	_update_bloom(dt)
+
+
 func _update_look(dt: float) -> void:
+	if _btn_mode():
+		_update_look_snappy(dt)
+		return
+	lock_target = null
 	var turn := 10.0 * _aim_mul()
 	if touch_mode:
 		var stick_on := aim_mag > AIM_DEAD
@@ -1649,10 +1880,10 @@ func _update_move(dt: float) -> void:
 
 	var w := _wish()
 	var aiming := _is_aiming() or recently_shot > 0.0
-	var sprint := not aiming and _sprinting(w)
+	var sprint := (not aiming or _t("aim_slow") >= 0.99) and _sprinting(w)
 	var speed := _slide_boost() if stance == "slide" else (_sprint() if sprint else _walk())
 	if aiming and stance != "slide":
-		speed *= AIM_SPEED
+		speed *= _t("aim_slow")
 	if crouch and stance == "stand":
 		speed *= 0.7
 
@@ -1697,8 +1928,17 @@ func _update_move(dt: float) -> void:
 		if stance == "slide" and slide_t <= 0.0:
 			stance = "stand"
 	elif w.y > 0.04:
-		_apply_friction(dt, _friction() * 0.45)
+		_apply_friction(dt, minf(_friction() * 0.45, 5.4))
 		_accelerate(w.x, w.z, speed * w.y, dt)
+		var kill := clampf((_friction() - 30.0) * dt * 0.1, 0.0, 1.0)
+		if kill > 0.0:
+			# snappy steering: bleed off sideways velocity so direction changes are immediate
+			var wd := Vector2(w.x, w.z).normalized()
+			var along := vel.x * wd.x + vel.z * wd.y
+			var lx := vel.x - wd.x * along
+			var lz := vel.z - wd.y * along
+			vel.x -= lx * kill
+			vel.z -= lz * kill
 	else:
 		_apply_friction(dt, _friction() * 1.35)
 
@@ -1805,7 +2045,9 @@ func _hurt_bot(b: Bot) -> void:
 	if b.state == "down":
 		return
 	b.hp -= 1
-	b.flash = 0.12
+	b.flash = maxf(_t("hit_flash") / 1000.0, 0.0)
+	if _tb("dmg_nums"):
+		ui.fx.add_number(b.node.position + Vector3(0, 2.7, 0), int(round(100.0 / maxf(b.max_hp, 1))))
 	synth.play("hit", 0.7)
 	b.alert = maxf(b.alert, 3.0)
 	b.last_seen = Vector2(pos.x, pos.z)
@@ -1817,6 +2059,7 @@ func _hurt_bot(b: Bot) -> void:
 		stats["kills"] += 1
 		b.bar_bg.visible = false
 		b.bar_fill.visible = false
+		_add_decal(b.node.position.x, b.node.position.z)
 		if not arena_mode:
 			_spawn_pickup(b.node.position.x, b.node.position.z, 24, 4, 0.0, true)
 	else:
@@ -1830,6 +2073,7 @@ func _hurt_player(amount: float) -> void:
 		return
 	hp -= amount * cover_dr
 	last_hit = _now()
+	vig_hit = 1.0
 	synth.play("hurt", 0.5)
 	if hp <= 0.0:
 		_fail()
@@ -1855,13 +2099,16 @@ func _fire() -> void:
 	mag -= 1
 	stats["shots"] += 1
 	burst_count += 1
-	if int(w["burst"]) > 1 and burst_count >= int(w["burst"]):
+	if int(w["burst"]) > 1 and burst_count >= int(w["burst"]) and (_tb("burst") or w["short"] != "CARBINE"):
 		burst_wait = w["burst_gap"]
 		burst_count = 0
 	var pellets: int = w["pellets"]
 	var heavy := pellets > 1
 	kick_p += (0.014 if heavy else 0.006) * _t("recoil")
-	muzzle_t = 0.045
+	twitch = 1.0
+	muzzle_t = 0.06
+	muzzle_flash.rotation.y = randf() * TAU
+	muzzle_flash.scale = Vector3.ONE * _t("flash_size")
 	synth.play("sweeper" if heavy else "carbine", 0.9)
 	var origin := Vector3(pos.x, 0.72 if crouch else 1.15, pos.z)
 	var base_dir := Vector3(sin(yaw), -0.02, cos(yaw)).normalized()
@@ -1891,7 +2138,8 @@ func _fire() -> void:
 		else:
 			end = origin + d * wd
 		_spawn_tracer(muz, end)
-		_spawn_spark(end)
+		if bh[0] == null:
+			_spawn_spark(end)
 	if any_hit:
 		stats["hits"] += 1
 	if mag <= 0:
@@ -1905,6 +2153,9 @@ func _update_shoot(dt: float) -> void:
 		burst_wait -= dt
 	var manual := aim_mag >= _fire_stick() if touch_mode else mouse_down
 	var auto := _is_aiming() and assist_target != null
+	if _btn_mode():
+		manual = fire_held or mouse_down
+		auto = _tb("autofire") and lock_target != null
 	if manual or auto:
 		_fire()
 		if last_shot > 0:
@@ -2030,7 +2281,8 @@ func _update_bots(dt: float) -> void:
 	for b in bots:
 		if b.flash > 0.0:
 			b.flash -= dt
-			b.node.set_flash(maxf(b.flash, 0.0))
+			var dur := maxf(_t("hit_flash") / 1000.0, 0.001)
+			b.node.set_flash(0.12 * clampf(b.flash / dur, 0.0, 1.0), 1.0)
 		if b.state == "down":
 			b.t += dt
 			b.crouch = false
@@ -2112,28 +2364,49 @@ func _spawn_tracer(a: Vector3, b: Vector3) -> void:
 	for t in tracers:
 		if float(t["life"]) > 0.0:
 			continue
-		var n: MeshInstance3D = t["node"]
 		var d := b - a
 		var l := d.length()
 		if l < 0.05:
 			return
-		var up := Vector3.UP if absf(d.normalized().y) < 0.95 else Vector3.RIGHT
-		n.transform = Transform3D(Basis.looking_at(d / l, up) * Basis.from_scale(Vector3(1, 1, l)), (a + b) * 0.5)
-		n.visible = true
-		t["life"] = 0.07
+		t["a"] = a
+		t["dir"] = d / l
+		t["dist"] = l
+		t["t"] = 0.0
+		t["speed"] = _t("tracer_speed")
+		t["life"] = l / _t("tracer_speed") + TRACER_LEN / _t("tracer_speed") + 0.01
+		_place_tracer(t)
 		return
 
 
+func _place_tracer(t: Dictionary) -> void:
+	var n: MeshInstance3D = t["node"]
+	var dist: float = t["dist"]
+	var head := minf(float(t["t"]) * float(t["speed"]), dist)
+	var tail := maxf(0.0, float(t["t"]) * float(t["speed"]) - TRACER_LEN)
+	var seg := head - tail
+	if seg < 0.02:
+		n.visible = false
+		return
+	var dir: Vector3 = t["dir"]
+	var up := Vector3.UP if absf(dir.y) < 0.95 else Vector3.RIGHT
+	var a: Vector3 = t["a"]
+	n.transform = Transform3D(Basis.looking_at(dir, up) * Basis.from_scale(Vector3(1, 1, seg)), a + dir * ((head + tail) * 0.5))
+	n.visible = true
+
+
 func _spawn_spark(p: Vector3) -> void:
+	var want := int(round(_t("spark_n")))
 	for s in sparks:
+		if want <= 0:
+			return
 		if float(s["life"]) > 0.0:
 			continue
 		var n: MeshInstance3D = s["node"]
 		n.position = p
 		n.visible = true
-		s["life"] = 0.18
-		s["v"] = Vector3(randf_range(-2, 2), randf_range(1, 3), randf_range(-2, 2))
-		return
+		s["life"] = 0.18 + randf() * 0.12
+		s["v"] = Vector3(randf_range(-3, 3), randf_range(1.5, 4), randf_range(-3, 3))
+		want -= 1
 
 
 func _update_fx(dt: float) -> void:
@@ -2141,8 +2414,11 @@ func _update_fx(dt: float) -> void:
 		if float(t["life"]) <= 0.0:
 			continue
 		t["life"] = float(t["life"]) - dt
+		t["t"] = float(t["t"]) + dt
 		if float(t["life"]) <= 0.0:
 			(t["node"] as Node3D).visible = false
+		else:
+			_place_tracer(t)
 	for s in sparks:
 		if float(s["life"]) <= 0.0:
 			continue
@@ -2157,7 +2433,7 @@ func _update_fx(dt: float) -> void:
 	if muzzle_t > 0.0:
 		muzzle_t -= dt
 		muzzle_flash.global_position = soldier.muzzle.global_position
-		muzzle_flash.visible = muzzle_t > 0.0
+		muzzle_flash.visible = muzzle_t > 0.0 and _t("flash_size") > 0.01
 	else:
 		muzzle_flash.visible = false
 
@@ -2169,12 +2445,24 @@ static func zoom_t(z: float) -> float:
 	return t * t * (3.0 - 2.0 * t)
 
 
+func _look_y(s: float) -> float:
+	return 1.48 * s + (0.8 * (1.0 - s) if _north_up() else 0.0)
+
+
+func _cam_ahead(s: float) -> float:
+	var base := _t("cam_ahead")
+	return lerpf(base if (_follow_view() or _north_up()) else base * 0.68, 2.05, s)
+
+
 func _camera_target(s: float) -> Vector3:
-	var follow := _follow_view()
-	var dist := lerpf(_cam_dist() if follow else _cam_dist() * 1.21, 4.9, s)
-	var ahead := lerpf(3.15 if follow else 2.15, 2.05, s)
+	if _north_up():
+		view_yaw = 0.0
+		view_pitch = 0.0
+	var rigid := _north_up()
+	var dist := lerpf(_cam_dist() if (_follow_view() or rigid) else _cam_dist() * 1.21, 4.9, s)
+	var ahead := _cam_ahead(s)
 	var tilt := lerpf(_cam_tilt(), 0.2792527, s) + view_pitch * (1.0 - 0.6 * s)
-	var look_y := 1.48 * s
+	var look_y := _look_y(s)
 	var fwd := Vector3(-sin(view_yaw), 0, -cos(view_yaw))
 	var right := Vector3(cos(view_yaw), 0, -sin(view_yaw))
 	var look := Vector3(pos.x, look_y, pos.z) + fwd * ahead
@@ -2182,7 +2470,7 @@ func _camera_target(s: float) -> Vector3:
 	want.y = look_y + dist * sin(tilt) * (1.0 - s) + (1.88 - look_y) * s
 	var dv := want - look
 	var l := dv.length()
-	if l > 0.2:
+	if l > 0.2 and not rigid:
 		var dn := dv / l
 		var hd := _world_hit(look, dn, l)
 		if hd < l - 0.12:
@@ -2194,17 +2482,20 @@ func _update_camera(dt: float) -> void:
 	zoom_show = _damp(zoom_show, float(settings["zoom"]), 10.0, dt)
 	var s := zoom_t(zoom_show)
 	var want := _camera_target(s)
-	cam_pos = cam_pos.lerp(want, 1.0 - exp(-(16.0 if (look_held or s > 0.35) else 8.5) * dt))
+	var lag := _t("cam_lag")
+	if lag <= 0.001:
+		cam_pos = want
+	else:
+		cam_pos = cam_pos.lerp(want, 1.0 - exp(-(16.0 if (look_held or s > 0.35) else 1.0 / lag) * dt))
 	kick_p = _damp(kick_p, 0.0, 10.0, dt)
 	var fwd := Vector3(-sin(view_yaw), 0, -cos(view_yaw))
-	var ahead := lerpf(3.15 if _follow_view() else 2.15, 2.05, s)
-	var look := Vector3(pos.x, 1.48 * s, pos.z) + fwd * ahead
+	var look := Vector3(pos.x, _look_y(s), pos.z) + fwd * _cam_ahead(s)
 	var d := cam_pos - look
 	var hy := Vector2(d.x, d.z).length()
 	camera.position = cam_pos
 	camera.rotation = Vector3(-atan2(d.y, maxf(0.15, hy)) + kick_p * 0.25, atan2(d.x, d.z), 0)
-	var fov := _t("cam_fov") + (3.0 if _sprinting(_wish()) else 0.0) + 4.0 * s
-	camera.fov = _damp(camera.fov, fov, 6.0, dt)
+	var fov := _t("cam_fov") + (3.0 if (_sprinting(_wish()) and not _north_up()) else 0.0) + 4.0 * s
+	camera.fov = fov if _north_up() else _damp(camera.fov, fov, 6.0, dt)
 	fill_light.position = Vector3(pos.x, 3.2, pos.z)
 
 
@@ -2239,12 +2530,17 @@ func _process(delta: float) -> void:
 	_update_camera(dt)
 	_update_fx(dt)
 	_update_hud()
+	_update_fx_layer(dt)
+	ui.tick(dt)
 
 
 func _update_player_visual(dt: float) -> void:
 	slide_mix = _damp(slide_mix, 1.0 if stance == "slide" else 0.0, 12.0, dt)
-	soldier.position = pos
-	soldier.rotation.y = yaw
+	twitch = _damp(twitch, 0.0, 20.0, dt)
+	var fdir := Vector3(sin(yaw), 0, cos(yaw))
+	var tw := twitch * _t("twitch")
+	soldier.position = pos - fdir * (0.16 * tw)
+	soldier.rotation.y = yaw + sin(Time.get_ticks_msec() * 0.09) * 0.05 * tw
 	var vu := -1.0
 	if not vault.is_empty():
 		vu = float(vault["t"]) / float(vault["dur"])
@@ -2253,7 +2549,17 @@ func _update_player_visual(dt: float) -> void:
 		ru = 1.0 - reload_t / float(_cur_wep()["reload"])
 	var aiming := _is_aiming() or recently_shot > 0.0
 	soldier.pose(dt, Vector2(vel.x, vel.z).length(), bob, slide_mix, slide_side, crouch, vu, aiming, hp <= 0.0, ru)
-	var show_aim := playing and not paused and not mission_over and (aiming or not touch_mode)
+	var btn := _btn_mode()
+	var show_aim := playing and not paused and not mission_over and (aiming or not touch_mode) and not btn
+	var show_laser := btn and _tb("laser") and lock_target != null and playing and not mission_over and hp > 0.0
+	laser.visible = show_laser
+	if show_laser:
+		var from := soldier.muzzle.global_position
+		var to := Vector3(lock_target.node.position.x, 1.0, lock_target.node.position.z)
+		var dv := to - from
+		var ln := dv.length()
+		if ln > 0.1:
+			laser.transform = Transform3D(Basis.looking_at(dv / ln, Vector3.UP) * Basis.from_scale(Vector3(1, 1, ln)), (from + to) * 0.5)
 	aim_line.visible = show_aim
 	if show_aim:
 		var len := 7.0
@@ -2262,9 +2568,25 @@ func _update_player_visual(dt: float) -> void:
 		aim_line.transform = Transform3D(Basis(Vector3.UP, yaw) * Basis.from_scale(Vector3(w, 1, len)), pos + f * (len * 0.5 + 0.6) + Vector3(0, 0.03, 0))
 		var locked := assist_target != null and _is_aiming()
 		aim_line_mat.albedo_color = Color(1.0, 0.76, 0.29, 0.75) if locked else Color(1.0, 0.88, 0.54, 0.45 + (1.0 - aim_bloom) * 0.25)
-	aim_mark.visible = show_aim and assist_target != null and _is_aiming()
+	aim_mark.visible = show_aim and assist_target != null and _is_aiming() and not btn
 	if aim_mark.visible:
 		aim_mark.position = Vector3(aim_point.x, 0.05, aim_point.z)
+
+
+func _update_fx_layer(dt: float) -> void:
+	if not ui.hud.visible:
+		return
+	vig_hit = maxf(0.0, vig_hit - dt / 0.5)
+	var base := _t("vignette") / 100.0
+	var low := clampf((0.4 - hp / max_hp) / 0.4, 0.0, 1.0) * 0.5 * (0.7 + 0.3 * sin(Time.get_ticks_msec() * 0.008))
+	var va := base * clampf(vig_hit + low, 0.0, 1.0)
+	var list: Array = []
+	for b in bots:
+		list.append({"world": b.node.position, "name": b.label, "alive": b.state != "down"})
+	var lk: Variant = null
+	if lock_target != null and _btn_mode() and lock_target.state != "down" and playing:
+		lk = lock_target.node.position
+	ui.fx.refresh(dt, list, lk, va)
 
 
 func _update_hud() -> void:
@@ -2272,6 +2594,7 @@ func _update_hud() -> void:
 		return
 	var w := _cur_wep()
 	ui.ammo_label.text = "%d / %d" % [mag, reserve]
+	ui.set_mag(mag, int(w["mag"]))
 	ui.wep_label.text = String(w["short"])
 	ui.low_label.visible = mag <= int(w["mag"]) / 4 and reload_t <= 0.0
 	ui.cover_label.visible = in_cover

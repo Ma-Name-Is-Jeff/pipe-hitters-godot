@@ -80,7 +80,7 @@ func _process(_dt: float) -> bool:
 		main.settings["zoom"] = 0.0
 	if frames == 220:
 		var cam2: Camera3D = main.camera
-		ok("zoom out ~60deg", absf(-cam2.rotation.x - 1.047) < 0.08, "pitch=%.3f" % -cam2.rotation.x)
+		ok("zoom out to preset pitch", absf(-cam2.rotation.x - deg_to_rad(float(main.settings["cam_pitch"]))) < 0.08, "pitch=%.3f" % -cam2.rotation.x)
 		print("CHECK DONE fails=%d" % fails)
 		quit(1 if fails > 0 else 0)
 	return false
