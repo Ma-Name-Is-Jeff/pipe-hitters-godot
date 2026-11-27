@@ -12,7 +12,10 @@ const SHOULDER_L := Vector3(0.25, 0.46, 0.02)
 const SHOULDER_R := Vector3(-0.25, 0.46, -0.02)
 const GUN_AIM_POS := Vector3(-0.13, 0.43, 0.34)
 ## v1i model: rifle butt in the right shoulder pocket, elbows bent (real-scale rifle).
-const MODEL_GUN_AIM_POS := Vector3(-0.15, 0.425, 0.41)
+static var model_gun_aim := Vector3(-0.1, 0.3, 0.32)
+static var model_gun_ready := Vector3(-0.03, 0.2, 0.24)
+## Support-hand point on the model rifle (rifle space), set on the rear of the handguard.
+static var model_support := Vector3(0, 0.005, 0.2)
 const GUN_READY_POS := Vector3(-0.08, 0.29, 0.31)
 const GUN_READY_ROT := Vector3(0.5, 0.42, 0.18)
 const AIM_TWIST := -0.3
@@ -40,6 +43,8 @@ static var use_model := true
 static var _soldier_scene: PackedScene
 static var _rifle_scene: PackedScene
 const PALM_OFF := 0.06
+var _model_l1 := 0.33
+var _model_l2 := 0.31
 ## v1j: plain head (no helmet); hair is its own material so it reads from above.
 const HAIR_COL := Color(0.24, 0.14, 0.07)
 var model: Node3D
@@ -728,7 +733,7 @@ func pose(dt: float, spd: float, bob: float, slide_mix: float, slide_side: float
 	head.rotation = Vector3(-spx * 0.7, -twist * 0.9, -spz * 0.5)
 
 	# Gun: low ready <-> shouldered, lagged bob + kick spring.
-	var gp := GUN_READY_POS.lerp(MODEL_GUN_AIM_POS if _model_on else GUN_AIM_POS, k_aim)
+	var gp := (model_gun_ready if _model_on else GUN_READY_POS).lerp(model_gun_aim if _model_on else GUN_AIM_POS, k_aim)
 	var gr := GUN_READY_ROT.lerp(Vector3(-spx, -twist, 0), k_aim)
 	var sway: float = float(anim["sway"])
 	gun_bob_lag = _ease(gun_bob_lag, bob_off, 10.0, dt)
@@ -789,10 +794,12 @@ func _build_model(top: Color, bottom: Color, vest: Color, helmet: Color, gear: C
 		_bi[nm] = i
 		_rest[nm] = _skel_xf * skel.get_bone_global_rest(i)
 		_order.append(nm)
+	_model_l1 = (_rest["upper_arm.L"] as Transform3D).origin.distance_to((_rest["forearm.L"] as Transform3D).origin)
+	_model_l2 = (_rest["forearm.L"] as Transform3D).origin.distance_to((_rest["hand.L"] as Transform3D).origin)
 	# Team materials (per soldier so the hit flash stays per soldier; meshes are shared).
 	var cols := {
 		"uniform_top": [top, 0.9], "uniform_pants": [bottom, 0.92], "gloves": [Color(0.13, 0.12, 0.11), 0.6],
-		"boots": [Color(0.1, 0.09, 0.085), 0.5], "skin": [skin.darkened(0.3), 0.8], "hair": [HAIR_COL, 0.9], "eyes": [Color(0.04, 0.04, 0.045), 0.35],
+		"boots": [Color(0.1, 0.09, 0.085), 0.5], "skin": [skin.darkened(0.3), 0.8], "hair": [HAIR_COL, 0.9], "eyes": [Color(0.05, 0.04, 0.035), 0.3], "sclera": [Color(0.78, 0.76, 0.72), 0.4],
 	}
 	var m_top := _mat(top, 0.9)
 	m_top.albedo_color = top.lightened(0.04)
@@ -828,6 +835,7 @@ func _build_model(top: Color, bottom: Color, vest: Color, helmet: Color, gear: C
 		var node: Node3D = rm.get_node(mk[0])
 		_marker_classic[mk[0]] = (mk[1] as Node3D).position
 		_marker_model[mk[0]] = rifle.transform * rm.transform * node.transform.origin
+	_marker_model["support"] = rifle.transform * rm.transform * model_support
 	_model_on = not use_model
 	_apply_mode(use_model)
 
@@ -977,8 +985,8 @@ func _arm(i: int, sd: String, g: Dictionary, sp: Transform3D, gt: Transform3D) -
 
 ## Two-bone IK in spine space. Places the segment nodes between joints.
 func _ik(i: int, s: Vector3, target: Vector3, pole: Vector3, hand_basis: Basis) -> void:
-	var lu := 0.35 if _model_on else LEN_UPPER   # v1j: model arms are a touch longer (thicker build)
-	var ll := 0.33 if _model_on else LEN_FORE
+	var lu := _model_l1 if _model_on else LEN_UPPER   # model arm lengths come from the model's rest pose
+	var ll := _model_l2 if _model_on else LEN_FORE
 	var d := target - s
 	var dist := clampf(d.length(), 0.06, lu + ll - 0.002)
 	var dir := d.normalized() if d.length() > 0.0001 else Vector3.FORWARD

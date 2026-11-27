@@ -654,7 +654,7 @@ func _load_settings() -> void:
 			settings[k] = cf.get_value("s", k, settings[k])
 		# v1j: the default camera moved closer (14.5 -> 11.2). Saved tuning keeps every custom
 		# value; only a camera still sitting on the old default follows the new one.
-		if cf.get_value("s", "tune_ver", "") != "v1j" and absf(float(settings["cam_dist"]) - 14.5) < 0.01:
+		if not ["v1j", "v1k"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["cam_dist"]) - 14.5) < 0.01:
 			settings["cam_dist"] = 11.2
 		settings["tune_ver"] = TuneDefs.VERSION
 	for it in TuneDefs.all_items():
