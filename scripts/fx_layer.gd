@@ -46,7 +46,7 @@ func clear_all() -> void:
 
 
 ## bots: Array of {world: Vector3, name: String, alive: bool}; locked: world pos or null.
-func refresh(dt: float, bots: Array, locked: Variant, vig: float) -> void:
+func refresh(dt: float, bots: Array, locked: Variant, vig: float, settle: float = 1.0) -> void:
 	vignette_a = vig
 	for n in numbers:
 		n["t"] = float(n["t"]) + dt
@@ -82,7 +82,9 @@ func refresh(dt: float, bots: Array, locked: Variant, vig: float) -> void:
 		var top := camera.unproject_position(lw + Vector3(0, 1.9, 0))
 		var bot := camera.unproject_position(lw)
 		var mid := (top + bot) * 0.5
-		bracket = {"pos": mid, "size": clampf(absf(bot.y - top.y) * 0.62, 26.0, 120.0)}
+		var su := clampf(settle, 0.0, 1.0)
+		su = su * su * (3.0 - 2.0 * su)
+		bracket = {"pos": mid, "size": clampf(absf(bot.y - top.y) * 0.62, 26.0, 120.0) * lerpf(1.7, 1.0, su), "settle": su}
 	queue_redraw()
 
 
@@ -102,12 +104,14 @@ func _draw() -> void:
 		var bp: Vector2 = bracket["pos"]
 		var h: float = float(bracket["size"])
 		var l := h * 0.36
-		var col := Color(1.0, 0.25, 0.2, 0.95)
+		var su: float = float(bracket.get("settle", 1.0))
+		var col := Color(1.0, 0.25, 0.2, lerpf(0.35, 0.95, su))
+		var w := lerpf(2.0, 3.0, su)
 		for sx in [-1.0, 1.0]:
 			for sy in [-1.0, 1.0]:
 				var c := bp + Vector2(sx * h, sy * h)
-				draw_line(c, c + Vector2(-sx * l, 0), col, 3.0)
-				draw_line(c, c + Vector2(0, -sy * l), col, 3.0)
+				draw_line(c, c + Vector2(-sx * l, 0), col, w)
+				draw_line(c, c + Vector2(0, -sy * l), col, w)
 	if show_arrows:
 		for a in arrows:
 			var p: Vector2 = a["pos"]

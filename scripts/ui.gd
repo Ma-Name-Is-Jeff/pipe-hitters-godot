@@ -53,6 +53,7 @@ var slot_back: ColorRect
 var mag_bar: MagBar
 var toast_label: Label
 var toast_t := 0.0
+var test_size := Vector2.ZERO
 var btn_mode := true
 var hud_bottom := true
 var pause_mode_btn: Button
@@ -357,6 +358,8 @@ func set_touch_mode(on: bool) -> void:
 
 
 func screen_size() -> Vector2:
+	if test_size != Vector2.ZERO:
+		return test_size
 	return get_viewport().get_visible_rect().size
 
 
@@ -364,43 +367,154 @@ func stick_center(i: int) -> Vector2:
 	return sticks.centers[i]
 
 
+func stick_radius() -> float:
+	return sticks.r if sticks else STICK_R
+
+
+func stick_hit_radius() -> float:
+	return stick_radius() * (120.0 / 66.0)
+
+
+## Convert CSS/dp to current stretch (viewport) units.
+func _dp(dp: float) -> float:
+	var vis := screen_size()
+	# v1d phone target is 844x390 CSS; when test_size is set, treat height as 390 CSS px.
+	if test_size != Vector2.ZERO:
+		return dp * vis.y / 390.0
+	var win := Vector2(get_viewport().get_window().size)
+	# Headless / odd window sizes: fall back to the 720-tall design scale.
+	if win.y < 200.0:
+		return dp * vis.y / 720.0
+	return dp * vis.y / win.y
+
+
+## 2x the v1c control sizes, scaled with screen height, with thumb-size floors.
+func touch_metrics() -> Dictionary:
+	var s := screen_size()
+	var h := maxf(s.y, 1.0)
+	var k := (h / 720.0) * 2.0
+	var min_fire := maxf(0.22 * h, _dp(48.0))
+	var min_small := maxf(0.12 * h, _dp(48.0))
+	var d := {
+		"fire": maxf(150.0 * k, min_fire),
+		"vault": maxf(92.0 * k, min_small),
+		"slide": maxf(92.0 * k, min_small),
+		"swap": maxf(78.0 * k, min_small),
+		"reload": maxf(64.0 * k, min_small),
+		"sprint": maxf(70.0 * k, min_small),
+		"grenade": maxf(70.0 * k, min_small),
+		"pause": maxf(56.0 * k, min_small),
+		"view": maxf(56.0 * k, min_small),
+		"tune": maxf(56.0 * k, min_small),
+		"stick": maxf(66.0 * k, min_small * 0.5),
+		"margin": maxf(_dp(10.0), 0.018 * h),
+		"gap": maxf(_dp(12.0), 0.032 * h),
+	}
+	return d
+
+
+func _set_btn_size(k: String, size: float) -> void:
+	var p: Control = tbtns[k]
+	p.size = Vector2(size, size)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.08, 0.09, 0.08, 0.45)
+	sb.border_color = Color(1, 1, 1, 0.45)
+	sb.set_border_width_all(maxi(2, int(round(size / 70.0 * 2.0))))
+	sb.set_corner_radius_all(int(size * 0.5))
+	p.add_theme_stylebox_override("panel", sb)
+	if p.get_child_count() > 0:
+		var l := p.get_child(0) as Label
+		if l:
+			l.add_theme_font_size_override("font_size", int(clampf(size * 0.22, 16.0, 42.0)))
+
+
+func _btn_center(k: String) -> Vector2:
+	var p: Control = tbtns[k]
+	return p.position + p.size * 0.5
+
+
+func _hud_block() -> Rect2:
+	if not hud_bottom or slot_back == null or not slot_back.visible:
+		return Rect2()
+	var r := Rect2(slot_back.position, slot_back.size).merge(Rect2(hp_back.position, hp_back.size))
+	return r.grow(8.0)
+
+
+func _clamp_btn(k: String, s: Vector2, margin: float, hud: Rect2) -> void:
+	var p: Control = tbtns[k]
+	var r := p.size.x * 0.5
+	var c := p.position + p.size * 0.5
+	c.x = clampf(c.x, margin + r, s.x - margin - r)
+	c.y = clampf(c.y, margin + r, s.y - margin - r)
+	var br := Rect2(c - Vector2(r, r), Vector2(r, r) * 2.0)
+	if hud.size.x > 1.0 and br.intersects(hud):
+		# Push up so the button sits above the HUD.
+		c.y = hud.position.y - r - 6.0
+		c.y = clampf(c.y, margin + r, s.y - margin - r)
+	p.position = c - p.size * 0.5
+
+
+func _separate_controls(keys: Array, stick: Vector2, stick_r: float, gap: float) -> void:
+	for _i in 20:
+		# Push satellites off the stick.
+		for k in keys:
+			var p: Control = tbtns[k]
+			if not p.visible:
+				continue
+			var c := p.position + p.size * 0.5
+			var need := p.size.x * 0.5 + stick_r + gap
+			var d := c - stick
+			if d.length() < 0.01:
+				d = Vector2(-1, 0)
+			if d.length() < need:
+				c = stick + d.normalized() * need
+				p.position = c - p.size * 0.5
+		# Push pairs apart, preferring to move the later (smaller) control.
+		for a in keys.size():
+			var ka: String = keys[a]
+			var pa: Control = tbtns[ka]
+			if not pa.visible:
+				continue
+			var ca := pa.position + pa.size * 0.5
+			var ra := pa.size.x * 0.5
+			for b in range(a + 1, keys.size()):
+				var kb: String = keys[b]
+				var pb: Control = tbtns[kb]
+				if not pb.visible:
+					continue
+				var cb := pb.position + pb.size * 0.5
+				var need2 := ra + pb.size.x * 0.5 + gap
+				var d2 := cb - ca
+				if d2.length() < 0.01:
+					d2 = Vector2(-1, -1)
+				if d2.length() < need2:
+					var push := (need2 - d2.length())
+					# Keep FIRE planted; move the other.
+					if ka == "fire":
+						cb += d2.normalized() * push
+						pb.position = cb - pb.size * 0.5
+					elif kb == "fire":
+						ca -= d2.normalized() * push
+						pa.position = ca - pa.size * 0.5
+					else:
+						var half := d2.normalized() * (push * 0.5)
+						ca -= half
+						cb += half
+						pa.position = ca - pa.size * 0.5
+						pb.position = cb - pb.size * 0.5
+
+
 func _layout() -> void:
 	if hud == null:
 		return
 	var s := screen_size()
-	var lx := maxf(118.0, s.x * 0.12)
-	var ly := s.y - maxf(118.0, s.y * 0.2)
-	sticks.centers[0] = Vector2(lx, ly)
-	sticks.centers[1] = Vector2(s.x - lx, ly)
-	sticks.visible = touch_mode
-	sticks.show_right = not btn_mode
-	var rc := sticks.centers[1]
-	if btn_mode:
-		var f := Vector2(s.x - 150, s.y - 170)
-		_place_btn("fire", f)
-		_place_btn("sprint", f + Vector2(-127, 46))
-		_place_btn("slide", f + Vector2(-127, -46))
-		_place_btn("vault", f + Vector2(-67, -117))
-		_place_btn("reload", f + Vector2(23, -133))
-		_place_btn("grenade", f + Vector2(103, -87))
-		_place_btn("swap", f + Vector2(-190, -125))
-	else:
-		_place_btn("slide", rc + Vector2(-150, 10))
-		_place_btn("vault", rc + Vector2(-112, -112))
-		_place_btn("swap", rc + Vector2(8, -150))
-		_place_btn("reload", rc + Vector2(-210, -60))
-	_place_btn("pause", Vector2(40, 40) if hud_bottom else Vector2(s.x - 40, 40))
-	_place_btn("view", Vector2(s.x - 40, 40) if hud_bottom else Vector2(s.x - 106, 40))
-	_place_btn("tune", Vector2(s.x - 106, 40) if hud_bottom else Vector2(s.x - 172, 40))
-	(tbtns["swap"] as Control).visible = touch_mode and not arena_mode
-	var tw := minf(820.0, s.x * 0.64)
-	tune_panel.position = Vector2(s.x - tw, 0)
-	tune_panel.size = Vector2(tw, s.y)
-	for k in ["slide", "vault", "reload"]:
-		(tbtns[k] as Control).visible = touch_mode
-	for k in ["fire", "sprint", "grenade"]:
-		(tbtns[k] as Control).visible = touch_mode and btn_mode
-	obj_label.position = Vector2(84, 12) if hud_bottom else Vector2(16, 12)
+	var m: Dictionary = touch_metrics()
+	var margin: float = m["margin"]
+	var gap: float = m["gap"]
+	for k in tbtns.keys():
+		if m.has(k):
+			_set_btn_size(k, float(m[k]))
+	# Bottom-center HUD first so the button placer can avoid it.
 	if hud_bottom:
 		var cx := s.x * 0.5
 		hp_back.position = Vector2(cx - 170, s.y - 112)
@@ -426,7 +540,93 @@ func _layout() -> void:
 		wep_label.position = ammo_label.position + Vector2(4, -20)
 		low_label.position = Vector2(s.x * 0.5 - 52, s.y - 112)
 	hp_fill.position = hp_back.position + Vector2(2, 2)
-	cover_label.position = Vector2(s.x * 0.5 - 36, 40)
+	var hud := _hud_block()
+
+	# Top buttons: pause left, VIEW and TUNE right.
+	var top: float = float(m["pause"])
+	if hud_bottom:
+		_place_btn("pause", Vector2(margin + top * 0.5, margin + top * 0.5))
+		_place_btn("view", Vector2(s.x - margin - top * 0.5, margin + top * 0.5))
+		_place_btn("tune", Vector2(s.x - margin - top * 1.5 - gap, margin + top * 0.5))
+	else:
+		_place_btn("pause", Vector2(s.x - margin - top * 0.5, margin + top * 0.5))
+		_place_btn("view", Vector2(s.x - margin - top * 1.5 - gap, margin + top * 0.5))
+		_place_btn("tune", Vector2(s.x - margin - top * 2.5 - gap * 2.0, margin + top * 0.5))
+
+	# Left move stick, clear of the HUD and the top-left pause button.
+	var sr: float = float(m["stick"])
+	var sc := Vector2(margin + sr, s.y - margin - sr)
+	if hud.size.x > 1.0:
+		var stick_rect := Rect2(sc - Vector2(sr, sr), Vector2(sr, sr) * 2.0)
+		if stick_rect.intersects(hud):
+			sc.x = minf(sc.x, hud.position.x - sr - gap)
+			sc.x = maxf(sc.x, margin + sr)
+	# Keep off the pause button.
+	var pc := _btn_center("pause")
+	var pr: float = (tbtns["pause"] as Control).size.x * 0.5
+	if sc.distance_to(pc) < sr + pr + gap:
+		sc.y = maxf(sc.y, pc.y + pr + sr + gap)
+		sc.y = minf(sc.y, s.y - margin - sr)
+	sticks.r = sr
+	sticks.centers[0] = sc
+	sticks.centers[1] = Vector2(s.x - margin - sr, s.y - margin - sr)
+	sticks.visible = touch_mode
+	sticks.show_right = not btn_mode
+
+	if btn_mode:
+		var fire: float = float(m["fire"])
+		var fr := fire * 0.5
+		# Leave a little room on the right so GRN can sit above-right of FIRE.
+		var fc := Vector2(s.x - margin - fr - 52.0, s.y - margin - fr - 72.0)
+		# Stay to the right of the bottom HUD.
+		if hud.size.x > 1.0:
+			fc.x = maxf(fc.x, hud.position.x + hud.size.x + fr + gap)
+			fc.x = minf(fc.x, s.x - margin - fr - 52.0)
+		_place_btn("fire", fc)
+		# Satellites in a wide arc left and above FIRE so 2x sizes don't overlap.
+		var arc := [
+			["sprint", deg_to_rad(215.0)],
+			["slide", deg_to_rad(172.0)],
+			["vault", deg_to_rad(134.0)],
+			["reload", deg_to_rad(98.0)],
+			["grenade", deg_to_rad(60.0)],
+			["swap", deg_to_rad(248.0)],
+		]
+		for item in arc:
+			var kk: String = item[0]
+			var ang: float = item[1]
+			var rr: float = (tbtns[kk] as Control).size.x * 0.5
+			var orbit := fr + rr + gap
+			if kk == "swap":
+				orbit *= 1.28
+			var pos := fc + Vector2(cos(ang), -sin(ang)) * orbit
+			_place_btn(kk, pos)
+	else:
+		var rc: Vector2 = sticks.centers[1]
+		_place_btn("slide", rc + Vector2(-sr * 2.15, 8))
+		_place_btn("vault", rc + Vector2(-sr * 1.55, -sr * 1.55))
+		_place_btn("swap", rc + Vector2(8, -sr * 2.15))
+		_place_btn("reload", rc + Vector2(-sr * 2.9, -sr * 0.7))
+
+	var cluster: Array = ["fire", "sprint", "slide", "vault", "reload", "grenade", "swap", "pause", "view", "tune"]
+	_separate_controls(cluster, sticks.centers[0], sr, gap)
+	for k2 in cluster:
+		_clamp_btn(k2, s, margin, hud)
+	_separate_controls(cluster, sticks.centers[0], sr, gap)
+	for k3 in cluster:
+		_clamp_btn(k3, s, margin, hud)
+
+	(tbtns["swap"] as Control).visible = touch_mode and not arena_mode
+	var tw := minf(900.0, s.x * 0.68)
+	tune_panel.position = Vector2(s.x - tw, 0)
+	tune_panel.size = Vector2(tw, s.y)
+	for k4 in ["slide", "vault", "reload"]:
+		(tbtns[k4] as Control).visible = touch_mode
+	for k5 in ["fire", "sprint", "grenade"]:
+		(tbtns[k5] as Control).visible = touch_mode and btn_mode
+	var pause_r: float = (tbtns["pause"] as Control).size.x
+	obj_label.position = Vector2((tbtns["pause"] as Control).position.x + pause_r + 10.0, 16) if hud_bottom else Vector2(16, 12)
+	cover_label.position = Vector2(s.x * 0.5 - 36, float(m["pause"]) + 8.0)
 	reload_label.position = Vector2(s.x * 0.5 - 62, s.y * 0.5 + 50)
 	toast_label.position = Vector2(s.x * 0.5 - 150, s.y * 0.5 - 80)
 	hint_label.size = Vector2(s.x, 40)
@@ -518,8 +718,8 @@ static func _circle(r: int, col: Color) -> ImageTexture:
 
 func _tune_theme() -> Theme:
 	var th := Theme.new()
-	th.default_font_size = 24
-	var g := _circle(24, Color(1.0, 0.82, 0.38))
+	th.default_font_size = 30
+	var g := _circle(32, Color(1.0, 0.82, 0.38))
 	th.set_icon("grabber", "HSlider", g)
 	th.set_icon("grabber_highlight", "HSlider", g)
 	th.set_icon("grabber_disabled", "HSlider", g)
@@ -547,13 +747,13 @@ func _tune_row(parent: Control, d: Dictionary) -> void:
 	parent.add_child(row)
 	var l := Label.new()
 	l.text = d["label"]
-	l.custom_minimum_size = Vector2(230, 0)
+	l.custom_minimum_size = Vector2(250, 0)
 	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(l)
 	var toggle: bool = d.get("toggle", false)
 	var minus := Button.new()
 	minus.text = "-"
-	minus.custom_minimum_size = Vector2(58, 58)
+	minus.custom_minimum_size = Vector2(70, 70)
 	if not toggle:
 		row.add_child(minus)
 	var sl := HSlider.new()
@@ -561,20 +761,20 @@ func _tune_row(parent: Control, d: Dictionary) -> void:
 	sl.max_value = d["max"]
 	sl.step = step
 	sl.value = d["def"]
-	sl.custom_minimum_size = Vector2(200, 58)
+	sl.custom_minimum_size = Vector2(200, 70)
 	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(sl)
 	var plus := Button.new()
 	plus.text = "+"
-	plus.custom_minimum_size = Vector2(58, 58)
+	plus.custom_minimum_size = Vector2(70, 70)
 	if not toggle:
 		row.add_child(plus)
 	var tbtn: Button = null
 	if toggle:
 		sl.visible = false
 		tbtn = Button.new()
-		tbtn.custom_minimum_size = Vector2(200, 58)
+		tbtn.custom_minimum_size = Vector2(200, 70)
 		tbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		tbtn.pressed.connect(func() -> void: sl.value = 0.0 if sl.value > 0.5 else 1.0)
 		row.add_child(tbtn)
@@ -604,7 +804,7 @@ func _tune_row(parent: Control, d: Dictionary) -> void:
 func _tune_btn(parent: Control, text: String, cb: Callable) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.custom_minimum_size = Vector2(0, 60)
+	b.custom_minimum_size = Vector2(0, 70)
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b.pressed.connect(cb)
 	parent.add_child(b)
@@ -631,21 +831,21 @@ func _build_tune() -> void:
 	var t := Label.new()
 	t.text = "TUNE " + TuneDefs.VERSION
 	t.add_theme_color_override("font_color", Color(0.95, 0.82, 0.42))
-	t.add_theme_font_size_override("font_size", 30)
+	t.add_theme_font_size_override("font_size", 36)
 	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(t)
 	for pn in ["snappy", "classic"]:
 		var pb := Button.new()
 		pb.text = pn.capitalize()
 		pb.toggle_mode = true
-		pb.custom_minimum_size = Vector2(124, 56)
+		pb.custom_minimum_size = Vector2(140, 64)
 		var pname: String = pn
 		pb.pressed.connect(func() -> void: tune_preset.emit(pname))
 		head.add_child(pb)
 		preset_btns[pn] = pb
 	var close := Button.new()
 	close.text = "Close"
-	close.custom_minimum_size = Vector2(150, 56)
+	close.custom_minimum_size = Vector2(160, 64)
 	close.pressed.connect(func() -> void: tune_close.emit())
 	head.add_child(close)
 	var tabs := HBoxContainer.new()
@@ -686,21 +886,21 @@ func _build_tune() -> void:
 	tune_status = Label.new()
 	tune_status.text = "Copy puts JSON on the clipboard and in the box."
 	tune_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	tune_status.add_theme_font_size_override("font_size", 20)
+	tune_status.add_theme_font_size_override("font_size", 24)
 	data.add_child(tune_status)
 	tune_text = TextEdit.new()
 	tune_text.custom_minimum_size = Vector2(0, 220)
 	tune_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	tune_text.placeholder_text = "Tuning JSON appears here. Paste or edit it, then tap Paste values."
-	tune_text.add_theme_font_size_override("font_size", 18)
+	tune_text.add_theme_font_size_override("font_size", 22)
 	data.add_child(tune_text)
 	for i in names.size():
 		var tb := Button.new()
 		tb.text = names[i]
 		tb.toggle_mode = true
-		tb.custom_minimum_size = Vector2(0, 54)
+		tb.custom_minimum_size = Vector2(0, 62)
 		tb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tb.add_theme_font_size_override("font_size", 21)
+		tb.add_theme_font_size_override("font_size", 26)
 		tb.pressed.connect(func() -> void: show_tune_tab(i))
 		tabs.add_child(tb)
 		tune_tabs.append(tb)

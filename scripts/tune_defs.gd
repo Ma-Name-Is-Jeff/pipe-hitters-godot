@@ -5,7 +5,7 @@ extends RefCounted
 ## Each item has a Snappy default ("def", the shipping default) and a Classic value ("cls",
 ## the pre-v1b feel). Toggles are 0/1 sliders flagged "toggle".
 
-const VERSION := "v1c"
+const VERSION := "v1d"
 
 static var _groups: Array = []
 
@@ -36,6 +36,14 @@ static func groups() -> Array:
 			_s("lock_range", "Lock range (m)", 22.0, 22.0, 8.0, 40.0, 1.0),
 			_s("lock_turn", "Lock turn (100 = instant)", 100.0, 100.0, 5.0, 100.0, 5.0),
 			_t("autofire", "Auto-fire when locked", 0, 0),
+			_s("settle_time", "Lock settle (s)", 0.3, 0.0, 0.0, 1.5, 0.05),
+			_s("settle_spread", "Settle start spread", 0.06, 0.0, 0.0, 0.2, 0.005),
+			_s("lock_grace", "Break-lock grace (s)", 0.15, 0.0, 0.0, 1.0, 0.05),
+			_s("spread_still", "Spread still/crouch (x)", 1.0, 1.0, 0.5, 4.0, 0.1),
+			_s("spread_walk", "Spread walking (x)", 1.8, 1.0, 0.5, 8.0, 0.1),
+			_s("spread_sprint", "Spread sprinting (x)", 3.0, 1.0, 0.5, 10.0, 0.1),
+			_s("spread_slide", "Spread sliding (x)", 4.0, 1.0, 0.5, 12.0, 0.1),
+			_s("spread_blend", "Spread blend (s)", 0.15, 0.05, 0.0, 0.6, 0.01),
 			_s("aim_sens", "Aim sensitivity (twin)", 70.0, 70.0, 20.0, 200.0, 1.0),
 			_s("aim_curve", "Response curve (twin)", 2.0, 2.0, 0.5, 4.0, 0.1),
 			_s("assist", "Assist strength (twin)", 70.0, 70.0, 0.0, 100.0, 1.0),
@@ -51,7 +59,7 @@ static func groups() -> Array:
 			_s("bloom", "Bloom gain", 0.0, 1.35, 0.0, 4.0, 0.05),
 			_s("spread", "Bullet spread", 0.002, 0.005, 0.0, 0.05, 0.001),
 			_s("tracer_speed", "Tracer speed (m/s)", 160.0, 600.0, 40.0, 600.0, 10.0),
-			_s("flash_size", "Muzzle star size", 1.5, 1.0, 0.0, 3.0, 0.1),
+			_s("flash_size", "Muzzle star size", 0.6, 1.0, 0.0, 3.0, 0.1),
 			_s("spark_n", "Wall sparks", 4.0, 1.0, 0.0, 10.0, 1.0),
 		]},
 		{"name": "Camera", "items": [
@@ -75,7 +83,7 @@ static func groups() -> Array:
 			_t("hud_bottom", "Bottom-center HUD", 1, 0),
 		]},
 		{"name": "Enemy", "items": [
-			_s("enemy_hp", "Enemy health (hits)", 5.0, 4.0, 1.0, 20.0, 1.0),
+			_s("enemy_hp", "Enemy health (hits)", 8.0, 4.0, 1.0, 20.0, 1.0),
 			_s("enemy_acc", "Enemy accuracy", 50.0, 50.0, 0.0, 100.0, 1.0),
 		]},
 	]

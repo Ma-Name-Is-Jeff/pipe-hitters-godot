@@ -46,7 +46,7 @@ func run() -> void:
 	var ui: GameUI = main.ui
 
 	# ---- presets
-	ok("Snappy is default", main.settings["preset"] == "snappy" and main._btn_mode() and main._north_up() and is_equal_approx(main._walk(), 6.3) and int(main._enemy_hp()) == 5)
+	ok("Snappy is default", main.settings["preset"] == "snappy" and main._btn_mode() and main._north_up() and is_equal_approx(main._walk(), 6.3) and int(main._enemy_hp()) == 8)
 	main.apply_preset("classic")
 	ok("Classic restores old feel", not main._btn_mode() and not main._north_up() and is_equal_approx(main._walk(), 5.6) and is_equal_approx(main._t("fire_ms"), 95.0) and main._tb("bars"))
 	main.apply_preset("snappy")
@@ -56,7 +56,7 @@ func run() -> void:
 	ok("toggle changes setting, preset becomes custom", not main._north_up() and main.settings["preset"] == "custom")
 	tog.value = 1.0
 	var n_items: int = TuneDefs.all_items().size()
-	ok("every item has a control", ui.tune_sliders.size() == n_items, "%d" % n_items)
+	ok("every item has a control", ui.tune_sliders.size() == n_items, "%d vs %d sliders" % [ui.tune_sliders.size(), n_items])
 
 	# ---- camera: north-up, rigid, centered, ~12 body lengths
 	main.view_yaw = 1.3
@@ -111,6 +111,7 @@ func run() -> void:
 	ok("perfect tracking after moving", absf(wrapf(main.yaw - want, -PI, PI)) < 0.02)
 	main.pos = Vector3(-4, 0, 2)
 	await wait(0.2)
+	await wait(0.4)
 	main.fire_held = true
 	key(KEY_D, true)
 	var t0: int = Time.get_ticks_msec()
@@ -128,7 +129,7 @@ func run() -> void:
 	key(KEY_D, false)
 	var shots: int = main.stats["shots"] - shots0
 	ok("~8 rounds/s", shots >= 6 and shots <= 10, "%d shots in ~1.1s (stops when enemy down; mag=%d)" % [shots, main.mag])
-	ok("enemy downed in 5 hits, ~0.6s", ttk >= 0.45 and ttk <= 0.75, "ttk=%.2fs  shots=%d  hp=%s" % [ttk, shots, bot.max_hp])
+	ok("enemy downed in 8 hits, ~1s", ttk >= 0.75 and ttk <= 1.25, "ttk=%.2fs  shots=%d  hp=%s" % [ttk, shots, bot.max_hp])
 	ok("no slowdown while shooting", sp_fire > main._walk() * 0.9, "%.2f vs %.2f" % [sp_fire, main._walk()])
 	ok("zero camera shake", main.kick_p < 0.0001)
 	ok("dead enemy tips over", bot.node.k_down > 0.5, "k=%.2f" % bot.node.k_down)
@@ -157,7 +158,7 @@ func run() -> void:
 
 	# ---- HUD layout + buttons
 	ok("pause at top-left", (ui.tbtns["pause"] as Control).position.x < 120)
-	ok("big FIRE button right side", (ui.tbtns["fire"] as Control).size.x >= 140 and (ui.tbtns["fire"] as Control).position.x > ui.screen_size().x * 0.6)
+	ok("big FIRE button right side", (ui.tbtns["fire"] as Control).size.x >= 0.22 * ui.screen_size().y and (ui.tbtns["fire"] as Control).position.x > ui.screen_size().x * 0.5)
 	ok("sprint/reload/grenade buttons exist", ui.tbtns.has("sprint") and ui.tbtns.has("reload") and ui.tbtns.has("grenade"))
 	var hp_y: float = ui.hp_back.position.y
 	ok("health bar bottom-center", hp_y > ui.screen_size().y * 0.7 and absf(ui.hp_back.position.x + ui.hp_back.size.x * 0.5 - ui.screen_size().x * 0.5) < 4.0)

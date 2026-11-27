@@ -172,6 +172,9 @@ var decals: Array[MeshInstance3D] = []
 var decal_i := 0
 var twitch := 0.0
 var lock_target: Bot = null
+var settle_t := 0.0
+var lock_lost_t := 0.0
+var spread_mul := 1.0
 var fire_held := false
 var fire_id := -1
 var sprint_held := false
@@ -505,7 +508,8 @@ func _build_fx() -> void:
 		add_child(m)
 		sparks.append({"node": m, "life": 0.0, "v": Vector3.ZERO})
 	muzzle_flash = Node3D.new()
-	var fmat := _flat_mat(Color(1.0, 0.93, 0.6))
+	var fmat := _flat_mat(Color(1.0, 0.86, 0.5, 0.5))
+	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	var arm := BoxMesh.new()
 	arm.size = Vector3(1.0, 0.03, 0.09)
 	for i in 4:
@@ -520,7 +524,9 @@ func _build_fx() -> void:
 	fs.radius = 0.12
 	fs.height = 0.24
 	core.mesh = fs
-	core.material_override = _flat_mat(Color(1.0, 1.0, 0.9))
+	var cmat := _flat_mat(Color(1.0, 0.92, 0.7, 0.55))
+	cmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	core.material_override = cmat
 	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	muzzle_flash.add_child(core)
 	muzzle_flash.visible = false
@@ -961,6 +967,9 @@ func _reset_mission() -> void:
 	fire_held = false
 	sprint_held = false
 	lock_target = null
+	settle_t = 0.0
+	lock_lost_t = 0.0
+	spread_mul = 1.0
 	twitch = 0.0
 	vig_hit = 0.0
 	ui.fx.clear_all()
@@ -1238,11 +1247,11 @@ func _on_touch(e: InputEventScreenTouch) -> void:
 		if b != "":
 			_touch_button(b)
 			return
-		if move_id < 0 and p.distance_to(ui.stick_center(0)) < STICK_HIT:
+		if move_id < 0 and p.distance_to(ui.stick_center(0)) < ui.stick_hit_radius():
 			move_id = e.index
 			_set_stick(0, p)
 			return
-		if aim_id < 0 and not _btn_mode() and p.distance_to(ui.stick_center(1)) < STICK_HIT:
+		if aim_id < 0 and not _btn_mode() and p.distance_to(ui.stick_center(1)) < ui.stick_hit_radius():
 			aim_id = e.index
 			_set_stick(1, p)
 			return
@@ -1277,7 +1286,7 @@ func _on_drag(e: InputEventScreenDrag) -> void:
 
 func _set_stick(i: int, p: Vector2) -> void:
 	var c := ui.stick_center(i)
-	var d := (p - c) / GameUI.STICK_R
+	var d := (p - c) / maxf(ui.stick_radius(), 1.0)
 	if d.length() > 1.0:
 		d = d.normalized()
 	if i == 0:
@@ -1663,29 +1672,101 @@ func _find_assist() -> Bot:
 
 
 ## Nearest living enemy in range with a clear line, or null.
+func _lock_dist(b: Bot) -> float:
+	var dx := b.node.position.x - pos.x
+	var dz := b.node.position.z - pos.z
+	return sqrt(dx * dx + dz * dz)
+
+
+func _lock_valid(b: Bot) -> bool:
+	if b == null or b.state == "down":
+		return false
+	var d := _lock_dist(b)
+	if d > _range() or d < 0.4:
+		return false
+	if _los_blocked(pos.x, pos.z, b.node.position.x, b.node.position.z):
+		return false
+	return true
+
+
 func _find_lock() -> Bot:
 	var best: Bot = null
 	var bd := 1e9
-	var rng := _range()
 	for b in bots:
-		if b.state == "down":
+		if not _lock_valid(b):
 			continue
-		var dx := b.node.position.x - pos.x
-		var dz := b.node.position.z - pos.z
-		var d := sqrt(dx * dx + dz * dz)
-		if d > rng or d < 0.4:
-			continue
-		if d >= bd:
-			continue
-		if _los_blocked(pos.x, pos.z, b.node.position.x, b.node.position.z):
-			continue
-		bd = d
-		best = b
+		var d := _lock_dist(b)
+		if d < bd:
+			bd = d
+			best = b
 	return best
 
 
+## 0 = just acquired (wide), 1 = fully settled.
+func _settle_u() -> float:
+	var t := _t("settle_time")
+	if t <= 0.001 or lock_target == null:
+		return 1.0 if lock_target != null or t <= 0.001 else 0.0
+	return clampf(settle_t / t, 0.0, 1.0)
+
+
+func _update_lock(dt: float) -> void:
+	var nxt := _find_lock()
+	if _lock_valid(lock_target):
+		lock_lost_t = 0.0
+		settle_t += dt
+		if nxt != null and nxt != lock_target:
+			lock_target = nxt
+			settle_t = 0.0
+	elif lock_target != null:
+		lock_lost_t += dt
+		if lock_lost_t > _t("lock_grace"):
+			lock_target = null
+			settle_t = 0.0
+			lock_lost_t = 0.0
+			if nxt != null:
+				lock_target = nxt
+				settle_t = 0.0
+	elif nxt != null:
+		lock_target = nxt
+		settle_t = 0.0
+		lock_lost_t = 0.0
+
+
+func _spread_state_mul() -> float:
+	if stance == "slide":
+		return _t("spread_slide")
+	if crouch:
+		return _t("spread_still")
+	if _sprinting(_wish()):
+		return _t("spread_sprint")
+	if Vector2(vel.x, vel.z).length() > 0.7:
+		return _t("spread_walk")
+	return _t("spread_still")
+
+
+func _update_spread_mul(dt: float) -> void:
+	var target := _spread_state_mul()
+	var blend := maxf(_t("spread_blend"), 0.001)
+	spread_mul = move_toward(spread_mul, target, 4.0 * dt / blend)
+
+
+## Current shot cone in radians, including movement and lock settle. Used by fire raycasts.
+func _shot_spread(w: Dictionary) -> float:
+	var spr := _spread(w) * (0.28 + aim_bloom * _t("bloom"))
+	spr *= maxf(spread_mul, 0.0)
+	# Movement adds a real, noticeable cone so 1.8x / 3x / 4x change hit rate.
+	var still := _t("spread_still")
+	spr += 0.04 * maxf(0.0, spread_mul - still)
+	if _btn_mode() and lock_target != null:
+		var u := _settle_u()
+		u = u * u * (3.0 - 2.0 * u)
+		spr = lerpf(_t("settle_spread"), spr, u)
+	return spr
+
+
 func _update_look_snappy(dt: float) -> void:
-	lock_target = _find_lock()
+	_update_lock(dt)
 	assist_target = lock_target
 	if lock_target != null:
 		var want := atan2(lock_target.node.position.x - pos.x, lock_target.node.position.z - pos.z)
@@ -1708,6 +1789,8 @@ func _update_look(dt: float) -> void:
 		_update_look_snappy(dt)
 		return
 	lock_target = null
+	settle_t = 0.0
+	lock_lost_t = 0.0
 	var turn := 10.0 * _aim_mul()
 	if touch_mode:
 		var stick_on := aim_mag > AIM_DEAD
@@ -2106,19 +2189,14 @@ func _fire() -> void:
 	var heavy := pellets > 1
 	kick_p += (0.014 if heavy else 0.006) * _t("recoil")
 	twitch = 1.0
-	muzzle_t = 0.06
+	muzzle_t = 0.04
 	muzzle_flash.rotation.y = randf() * TAU
 	muzzle_flash.scale = Vector3.ONE * _t("flash_size")
 	synth.play("sweeper" if heavy else "carbine", 0.9)
 	var origin := Vector3(pos.x, 0.72 if crouch else 1.15, pos.z)
 	var base_dir := Vector3(sin(yaw), -0.02, cos(yaw)).normalized()
 	var muz := soldier.muzzle.global_position
-	var still := aim_bloom < 0.22 and Vector2(vel.x, vel.z).length() < 0.8
-	var spr := _spread(w) * (0.28 + aim_bloom * _t("bloom"))
-	if still:
-		spr *= 0.32
-	if first and not heavy:
-		spr *= 0.22
+	var spr := _shot_spread(w)
 	var rng: float = w["range"]
 	var any_hit := false
 	for i in pellets:
@@ -2510,6 +2588,7 @@ func _process(delta: float) -> void:
 	if _game_active():
 		_update_look(dt)
 		_update_move(dt)
+		_update_spread_mul(dt)
 		_update_cover()
 		_update_shoot(dt)
 		_update_bots(dt)
@@ -2558,8 +2637,14 @@ func _update_player_visual(dt: float) -> void:
 		var to := Vector3(lock_target.node.position.x, 1.0, lock_target.node.position.z)
 		var dv := to - from
 		var ln := dv.length()
+		var su := _settle_u()
+		su = su * su * (3.0 - 2.0 * su)
+		var lm := laser.material_override as StandardMaterial3D
+		if lm:
+			lm.albedo_color = Color(1.0, 0.22, 0.16, lerpf(0.16, 0.92, su))
 		if ln > 0.1:
-			laser.transform = Transform3D(Basis.looking_at(dv / ln, Vector3.UP) * Basis.from_scale(Vector3(1, 1, ln)), (from + to) * 0.5)
+			var thick := lerpf(0.7, 1.15, su)
+			laser.transform = Transform3D(Basis.looking_at(dv / ln, Vector3.UP) * Basis.from_scale(Vector3(thick, thick, ln)), (from + to) * 0.5)
 	aim_line.visible = show_aim
 	if show_aim:
 		var len := 7.0
@@ -2586,7 +2671,7 @@ func _update_fx_layer(dt: float) -> void:
 	var lk: Variant = null
 	if lock_target != null and _btn_mode() and lock_target.state != "down" and playing:
 		lk = lock_target.node.position
-	ui.fx.refresh(dt, list, lk, va)
+	ui.fx.refresh(dt, list, lk, va, _settle_u() if lock_target != null and _btn_mode() else 1.0)
 
 
 func _update_hud() -> void:
