@@ -246,17 +246,17 @@ func _build_env() -> void:
 	# Night op mood: cold moonlight, blue haze, glow on lamps, mild grade.
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color8(18, 24, 34)
+	env.background_color = Color8(22, 30, 42)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color8(92, 112, 140)
-	env.ambient_light_energy = 0.55
+	env.ambient_light_energy = 0.72
 	env.fog_enabled = true
 	env.fog_light_color = Color8(40, 52, 70)
-	env.fog_light_energy = 1.0
+	env.fog_light_energy = 1.15
 	env.fog_density = 0.016
 	env.fog_sky_affect = 1.0
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_exposure = 1.1
+	env.tonemap_exposure = 1.28
 	env.glow_enabled = true
 	env.glow_intensity = 0.7
 	env.glow_bloom = 0.05
@@ -269,7 +269,7 @@ func _build_env() -> void:
 	add_child(we)
 	sun = DirectionalLight3D.new()
 	sun.rotation = Vector3(deg_to_rad(-48), deg_to_rad(28), 0)
-	sun.light_energy = 0.55
+	sun.light_energy = 0.72
 	sun.light_specular = 1.0
 	sun.light_color = Color8(170, 196, 255)
 	sun.shadow_enabled = true
@@ -280,7 +280,7 @@ func _build_env() -> void:
 	# Cool fill light that rides with the player for readability.
 	fill_light = OmniLight3D.new()
 	fill_light.light_color = Color8(190, 210, 255)
-	fill_light.light_energy = 0.9
+	fill_light.light_energy = 1.15
 	fill_light.omni_range = 9.0
 	fill_light.omni_attenuation = 1.4
 	fill_light.shadow_enabled = false

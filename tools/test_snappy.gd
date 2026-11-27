@@ -46,7 +46,7 @@ func run() -> void:
 	var ui: GameUI = main.ui
 
 	# ---- presets
-	ok("Snappy is default", main.settings["preset"] == "snappy" and main._btn_mode() and main._north_up() and is_equal_approx(main._walk(), 6.3))
+	ok("Snappy is default", main.settings["preset"] == "snappy" and main._btn_mode() and main._north_up() and is_equal_approx(main._walk(), 6.3) and int(main._enemy_hp()) == 5)
 	main.apply_preset("classic")
 	ok("Classic restores old feel", not main._btn_mode() and not main._north_up() and is_equal_approx(main._walk(), 5.6) and is_equal_approx(main._t("fire_ms"), 95.0) and main._tb("bars"))
 	main.apply_preset("snappy")
@@ -128,7 +128,7 @@ func run() -> void:
 	key(KEY_D, false)
 	var shots: int = main.stats["shots"] - shots0
 	ok("~8 rounds/s", shots >= 6 and shots <= 10, "%d shots in ~1.1s (stops when enemy down; mag=%d)" % [shots, main.mag])
-	ok("enemy downed in ~4 hits, < 0.8s", ttk > 0.0 and ttk < 0.8, "ttk=%.2fs" % ttk)
+	ok("enemy downed in 5 hits, ~0.6s", ttk >= 0.45 and ttk <= 0.75, "ttk=%.2fs  shots=%d  hp=%s" % [ttk, shots, bot.max_hp])
 	ok("no slowdown while shooting", sp_fire > main._walk() * 0.9, "%.2f vs %.2f" % [sp_fire, main._walk()])
 	ok("zero camera shake", main.kick_p < 0.0001)
 	ok("dead enemy tips over", bot.node.k_down > 0.5, "k=%.2f" % bot.node.k_down)
