@@ -86,17 +86,8 @@ static func _cap(r: float, h: float) -> Mesh:
 		var m := CapsuleMesh.new()
 		m.radius = r
 		m.height = maxf(h, r * 2.0 + 0.002)
-		m.radial_segments = 10
-		m.rings = 2
-		_meshes[key] = m
-	return _meshes[key]
-
-
-static func _box(w: float, h: float, d: float) -> Mesh:
-	var key := "box%.3f_%.3f_%.3f" % [w, h, d]
-	if not _meshes.has(key):
-		var m := BoxMesh.new()
-		m.size = Vector3(w, h, d)
+		m.radial_segments = 16
+		m.rings = 4
 		_meshes[key] = m
 	return _meshes[key]
 
@@ -107,23 +98,147 @@ static func _sph(r: float) -> Mesh:
 		var m := SphereMesh.new()
 		m.radius = r
 		m.height = r * 2.0
-		m.radial_segments = 12
-		m.rings = 6
+		m.radial_segments = 16
+		m.rings = 8
 		_meshes[key] = m
 	return _meshes[key]
 
 
-static func _cyl(r: float, h: float) -> Mesh:
-	var key := "cyl%.3f_%.3f" % [r, h]
-	if not _meshes.has(key):
-		var m := CylinderMesh.new()
-		m.top_radius = r
-		m.bottom_radius = r
-		m.height = h
-		m.radial_segments = 8
-		m.rings = 1
-		_meshes[key] = m
-	return _meshes[key]
+## Smooth surface of revolution about Y from (radius, y) profile points, bottom to top.
+static func _lathe(key: String, prof: Array, seg := 16) -> Mesh:
+	if _meshes.has(key):
+		return _meshes[key]
+	var n := prof.size()
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	for i in n:
+		var p: Vector2 = prof[i]
+		var p0: Vector2 = prof[maxi(i - 1, 0)]
+		var p1: Vector2 = prof[mini(i + 1, n - 1)]
+		var t := p1 - p0
+		var nn := Vector2(t.y, -t.x).normalized()
+		for j in seg + 1:
+			var a := TAU * float(j) / float(seg)
+			verts.append(Vector3(p.x * sin(a), p.y, p.x * cos(a)))
+			norms.append(Vector3(nn.x * sin(a), nn.y, nn.x * cos(a)).normalized())
+	for i in n - 1:
+		for j in seg:
+			var v00 := i * (seg + 1) + j
+			var v01 := v00 + 1
+			var v10 := v00 + seg + 1
+			var v11 := v10 + 1
+			idx.append_array([v00, v01, v10, v01, v11, v10])
+	return _finish(key, verts, norms, idx)
+
+
+static func _finish(key: String, verts: PackedVector3Array, norms: PackedVector3Array, idx: PackedInt32Array) -> Mesh:
+	# Godot front faces are clockwise: flip any triangle whose winding opposes its normal.
+	for t in range(0, idx.size(), 3):
+		var a := verts[idx[t]]
+		var b := verts[idx[t + 1]]
+		var c := verts[idx[t + 2]]
+		var gn := (b - a).cross(c - a)
+		var vn := norms[idx[t]] + norms[idx[t + 1]] + norms[idx[t + 2]]
+		if gn.dot(vn) > 0.0:
+			var tmp := idx[t + 1]
+			idx[t + 1] = idx[t + 2]
+			idx[t + 2] = tmp
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_NORMAL] = norms
+	arr[Mesh.ARRAY_INDEX] = idx
+	var m := ArrayMesh.new()
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	_meshes[key] = m
+	return m
+
+
+## Tapered rounded limb/torso: `keys` = [[u 0..1 bottom->top, radius], ...]. Total height = len,
+## both ends are rounded caps (end radius from the first/last key), bulges come from the keys.
+static func _limb(name: String, len: float, keys: Array) -> Mesh:
+	var key := "limb_%s_%.3f" % [name, len]
+	if _meshes.has(key):
+		return _meshes[key]
+	var r0: float = keys[0][1]
+	var r1: float = keys[keys.size() - 1][1]
+	var prof: Array = []
+	var h := len * 0.5
+	for k in 7:
+		var ph := PI * 0.5 * float(k) / 6.0
+		prof.append(Vector2(r0 * sin(ph), -h + r0 - r0 * cos(ph)))
+	var y0 := -h + r0
+	var y1 := h - r1
+	var steps := 8
+	for k in range(1, steps):
+		var u := float(k) / float(steps)
+		var y := lerpf(y0, y1, u)
+		var uu := (y + h) / len
+		var rr := r0
+		for q in keys.size() - 1:
+			var ua: float = keys[q][0]
+			var ub: float = keys[q + 1][0]
+			if uu >= ua and uu <= ub:
+				var f := smoothstep(0.0, 1.0, (uu - ua) / maxf(ub - ua, 1e-4))
+				rr = lerpf(float(keys[q][1]), float(keys[q + 1][1]), f)
+		prof.append(Vector2(rr, y))
+	for k in 7:
+		var ph2 := PI * 0.5 * float(6 - k) / 6.0
+		prof.append(Vector2(r1 * sin(ph2), h - r1 + r1 * cos(ph2)))
+	return _lathe(key, prof)
+
+
+## Rounded (beveled) box: cube grid pushed onto an inner box + sphere radius r.
+static func _rbox(w: float, h: float, d: float, r: float) -> Mesh:
+	var key := "rbox%.3f_%.3f_%.3f_%.3f" % [w, h, d, r]
+	if _meshes.has(key):
+		return _meshes[key]
+	var half := Vector3(w, h, d) * 0.5
+	r = minf(r, minf(half.x, minf(half.y, half.z)) - 0.001)
+	var inner := half - Vector3(r, r, r)
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var offs := [1.0, tan(deg_to_rad(30.0)), tan(deg_to_rad(12.0)), 0.0]
+	for axis in 3:
+		for sg in [-1.0, 1.0]:
+			var u_ax := (axis + 1) % 3
+			var v_ax := (axis + 2) % 3
+			var cu := _bevel_coords(half[u_ax], inner[u_ax], r, offs)
+			var cv := _bevel_coords(half[v_ax], inner[v_ax], r, offs)
+			var base := verts.size()
+			for iv in cv.size():
+				for iu in cu.size():
+					var p := Vector3.ZERO
+					p[axis] = half[axis] * sg
+					p[u_ax] = cu[iu]
+					p[v_ax] = cv[iv]
+					var q := p.clamp(-inner, inner)
+					var dir := p - q
+					var nrm := dir.normalized() if dir.length() > 1e-5 else Vector3.ZERO
+					if nrm == Vector3.ZERO:
+						nrm[axis] = sg
+					verts.append(q + nrm * r)
+					norms.append(nrm)
+			for iv in cv.size() - 1:
+				for iu in cu.size() - 1:
+					var a := base + iv * cu.size() + iu
+					var b := a + 1
+					var c := a + cu.size()
+					var e := c + 1
+					idx.append_array([a, b, c, b, e, c])
+	return _finish(key, verts, norms, idx)
+
+
+static func _bevel_coords(h: float, inner: float, r: float, offs: Array) -> Array:
+	var out: Array = []
+	# -h edge up to -inner, then +inner up to +h, bevel points follow r*tan(angle).
+	for k in 4:
+		out.append(-(inner + r * float(offs[k])))
+	for k in range(3, -1, -1):
+		out.append(inner + r * float(offs[k]))
+	return out
 
 
 func _mat(c: Color, rough := 0.85, metal := 0.0) -> StandardMaterial3D:
@@ -133,6 +248,10 @@ func _mat(c: Color, rough := 0.85, metal := 0.0) -> StandardMaterial3D:
 	m.metallic = metal
 	m.emission_enabled = true
 	m.emission = base_emission
+	# Soft rim so rounded forms read from above at night.
+	m.rim_enabled = true
+	m.rim = 0.22
+	m.rim_tint = 0.45
 	mats.append(m)
 	return m
 
@@ -153,23 +272,26 @@ func _mi(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3, rot := Vector3
 ## face: balaclava color. visor: eye-protection glow color (black = no glow).
 func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, skin: Color, gun_col: Color, face := Color(0.09, 0.09, 0.1), visor := Color(0, 0, 0), emission := Color(0, 0, 0)) -> void:
 	base_emission = emission
-	var m_top := _mat(top)
+	# Slight separation: uniform < carrier (vest) < lighter gear, so the forms read from above.
+	var m_top := _mat(top, 0.93)
 	m_top.albedo_color = Color.WHITE
 	m_top.albedo_texture = camo_texture(top)
 	m_top.uv1_scale = Vector3(2, 2, 1)
-	var m_bot := _mat(bottom)
+	var m_bot := _mat(bottom, 0.9)
 	m_bot.albedo_color = Color.WHITE
 	m_bot.albedo_texture = camo_texture(bottom)
 	m_bot.uv1_scale = Vector3(2, 3, 1)
 	var m_face := _mat(face, 0.95)
-	var m_vest := _mat(vest, 0.9)
-	var m_helm := _mat(helmet, 0.6)
-	var m_gear := _mat(gear, 0.9)
-	var m_skin := _mat(skin, 0.65)
-	var m_boot := _mat(Color(0.13, 0.12, 0.11), 0.7)
-	var m_glove := _mat(Color(0.17, 0.16, 0.14), 0.75)
+	var m_vest := _mat(vest.darkened(0.1), 0.78)
+	var m_helm := _mat(helmet, 0.42)
+	var m_gear := _mat(gear.lightened(0.1), 0.68)
+	var m_pouch := _mat(gear.lightened(0.18), 0.82)
+	var m_skin := _mat(skin, 0.6)
+	var m_boot := _mat(Color(0.14, 0.13, 0.12), 0.55)
+	var m_glove := _mat(Color(0.2, 0.19, 0.17), 0.7)
 	var m_gun := _mat(gun_col, 0.45, 0.35)
 	var m_dark := _mat(Color(0.07, 0.07, 0.08), 0.35, 0.25)
+	var m_mask := _mat(face.lightened(0.05), 0.85)
 
 	body = Node3D.new()
 	add_child(body)
@@ -177,28 +299,34 @@ func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, s
 	hips.position = Vector3(0, HIP_Y, 0)
 	body.add_child(hips)
 
+	# Pelvis: rounded block + belt, hip pouch.
 	part_bottom = Node3D.new()
 	hips.add_child(part_bottom)
-	_mi(part_bottom, _box(0.42, 0.24, 0.27), m_bot, Vector3.ZERO)
-	_mi(part_bottom, _box(0.45, 0.06, 0.29), m_gear, Vector3(0, 0.11, 0), Vector3.ZERO, Vector3.ONE, false)
-	_mi(part_bottom, _box(0.12, 0.1, 0.08), m_gear, Vector3(0.17, 0.02, -0.14), Vector3.ZERO, Vector3.ONE, false)
+	_mi(part_bottom, _limb("pelvis", 0.34, [[0.0, 0.17], [0.5, 0.2], [1.0, 0.17]]), m_bot, Vector3.ZERO, Vector3(0, 0, PI * 0.5), Vector3(0.78, 1.0, 1.0))
+	_mi(part_bottom, _limb("belt", 0.5, [[0.0, 0.105], [0.5, 0.115], [1.0, 0.105]]), m_gear, Vector3(0, 0.1, 0), Vector3(0, 0, PI * 0.5), Vector3(0.62, 1.0, 1.0), false)
+	_mi(part_bottom, _rbox(0.13, 0.12, 0.09, 0.04), m_pouch, Vector3(0.18, 0.0, -0.13), Vector3.ZERO, Vector3.ONE, false)
 	for i in 2:
 		var sx := 0.125 if i == 0 else -0.125
+		var hs := 1.0 if i == 0 else -1.0
 		var th := Node3D.new()
 		th.position = Vector3(sx, -0.05, 0)
 		hips.add_child(th)
-		_mi(th, _cap(0.118, LEN_THIGH + 0.14), m_bot, Vector3(0, -LEN_THIGH * 0.5, 0))
-		var hs := 1.0 if i == 0 else -1.0
-		_mi(th, _box(0.07, 0.15, 0.14), m_gear, Vector3(hs * 0.12, -0.16, 0), Vector3.ZERO, Vector3.ONE, false)
+		# Thigh: thick at the hip, muscle bulge, tapering to the knee.
+		_mi(th, _limb("thigh", LEN_THIGH + 0.12, [[0.0, 0.09], [0.35, 0.128], [0.7, 0.115], [1.0, 0.097]]), m_bot, Vector3(0, -LEN_THIGH * 0.5, 0))
+		_mi(th, _rbox(0.07, 0.15, 0.13, 0.03), m_pouch, Vector3(hs * 0.125, -0.17, 0), Vector3.ZERO, Vector3.ONE, false)
 		var kn := Node3D.new()
 		kn.position = Vector3(0, -LEN_THIGH, 0)
 		th.add_child(kn)
-		_mi(kn, _box(0.15, 0.14, 0.07), m_gear, Vector3(0, -0.01, 0.1), Vector3.ZERO, Vector3.ONE, false)
-		_mi(kn, _cap(0.1, LEN_SHIN + 0.08), m_bot, Vector3(0, -LEN_SHIN * 0.5, 0))
+		_mi(kn, _sph(0.105), m_bot, Vector3.ZERO)
+		_mi(kn, _rbox(0.15, 0.14, 0.07, 0.04), m_gear, Vector3(0, -0.005, 0.1), Vector3.ZERO, Vector3.ONE, false)
+		_mi(kn, _limb("shin", LEN_SHIN + 0.08, [[0.0, 0.066], [0.35, 0.098], [0.7, 0.088], [1.0, 0.075]]), m_bot, Vector3(0, -LEN_SHIN * 0.5, 0))
 		var ft := Node3D.new()
 		ft.position = Vector3(0, -LEN_SHIN, 0)
 		kn.add_child(ft)
-		_mi(ft, _box(0.16, 0.13, 0.32), m_boot, Vector3(0, -0.035, 0.06))
+		# Chunky rounded boot with a rounded toe cap and ankle cuff.
+		_mi(ft, _rbox(0.17, 0.14, 0.26, 0.06), m_boot, Vector3(0, -0.04, 0.03))
+		_mi(ft, _sph(0.085), m_boot, Vector3(0, -0.05, 0.16), Vector3.ZERO, Vector3(1.0, 0.75, 1.15))
+		_mi(ft, _limb("cuff", 0.12, [[0.0, 0.082], [0.5, 0.09], [1.0, 0.082]]), m_boot, Vector3(0, 0.03, 0), Vector3.ZERO, Vector3.ONE, false)
 		thighs.append(th)
 		knees.append(kn)
 		feet.append(ft)
@@ -208,20 +336,20 @@ func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, s
 	hips.add_child(spine)
 	part_top = Node3D.new()
 	spine.add_child(part_top)
-	# Chunky action-figure torso: boxy plate carrier with pouches and broad shoulders.
-	_mi(part_top, _cap(0.17, 0.54), m_top, Vector3(0, 0.25, 0), Vector3.ZERO, Vector3(1.45, 1.0, 0.95))
-	_mi(part_top, _box(0.54, 0.36, 0.36), m_vest, Vector3(0, 0.31, 0.005))
-	_mi(part_top, _box(0.56, 0.07, 0.38), m_gear, Vector3(0, 0.14, 0.005), Vector3.ZERO, Vector3.ONE, false)
-	for px in [-0.16, 0.0, 0.16]:
-		_mi(part_top, _box(0.11, 0.17, 0.08), m_gear, Vector3(px, 0.25, 0.215), Vector3.ZERO, Vector3.ONE, false)
-		_mi(part_top, _box(0.113, 0.035, 0.085), m_dark, Vector3(px, 0.345, 0.215), Vector3.ZERO, Vector3.ONE, false)
-	for sx2 in [-0.29, 0.29]:
-		_mi(part_top, _box(0.06, 0.18, 0.2), m_gear, Vector3(sx2, 0.27, 0.0), Vector3.ZERO, Vector3.ONE, false)
-	_mi(part_top, _box(0.4, 0.3, 0.13), m_gear, Vector3(0, 0.32, -0.24), Vector3.ZERO, Vector3.ONE, false)
-	_mi(part_top, _sph(0.115), m_top, SHOULDER_L, Vector3.ZERO, Vector3(1.15, 0.9, 1.0))
-	_mi(part_top, _sph(0.115), m_top, SHOULDER_R, Vector3.ZERO, Vector3(1.15, 0.9, 1.0))
-	_mi(part_top, _box(0.16, 0.05, 0.2), m_vest, SHOULDER_L + Vector3(0, 0.08, 0), Vector3.ZERO, Vector3.ONE, false)
-	_mi(part_top, _box(0.16, 0.05, 0.2), m_vest, SHOULDER_R + Vector3(0, 0.08, 0), Vector3.ZERO, Vector3.ONE, false)
+	# Rounded torso (uniform), beveled plate-carrier slab, soft-cornered pouches, round shoulders.
+	_mi(part_top, _limb("torso", 0.62, [[0.0, 0.14], [0.35, 0.185], [0.75, 0.2], [1.0, 0.15]]), m_top, Vector3(0, 0.27, 0), Vector3.ZERO, Vector3(1.55, 1.0, 1.0))
+	_mi(part_top, _rbox(0.5, 0.36, 0.34, 0.1), m_vest, Vector3(0, 0.31, 0.005))
+	_mi(part_top, _rbox(0.52, 0.08, 0.35, 0.04), m_gear, Vector3(0, 0.14, 0.005), Vector3.ZERO, Vector3.ONE, false)
+	for px in [-0.15, 0.0, 0.15]:
+		_mi(part_top, _rbox(0.11, 0.17, 0.08, 0.035), m_pouch, Vector3(px, 0.25, 0.2), Vector3.ZERO, Vector3.ONE, false)
+		_mi(part_top, _rbox(0.113, 0.035, 0.085, 0.015), m_dark, Vector3(px, 0.345, 0.2), Vector3.ZERO, Vector3.ONE, false)
+	for sx2 in [-0.27, 0.27]:
+		_mi(part_top, _rbox(0.07, 0.18, 0.2, 0.03), m_pouch, Vector3(sx2, 0.27, 0.0), Vector3.ZERO, Vector3.ONE, false)
+	_mi(part_top, _rbox(0.38, 0.3, 0.12, 0.05), m_gear, Vector3(0, 0.32, -0.23), Vector3.ZERO, Vector3.ONE, false)
+	_mi(part_top, _sph(0.115), m_top, SHOULDER_L, Vector3.ZERO, Vector3(1.1, 0.95, 1.0))
+	_mi(part_top, _sph(0.115), m_top, SHOULDER_R, Vector3.ZERO, Vector3(1.1, 0.95, 1.0))
+	_mi(part_top, _sph(0.095), m_vest, SHOULDER_L + Vector3(0, 0.06, 0), Vector3.ZERO, Vector3(1.15, 0.55, 1.2), false)
+	_mi(part_top, _sph(0.095), m_vest, SHOULDER_R + Vector3(0, 0.06, 0), Vector3.ZERO, Vector3(1.15, 0.55, 1.2), false)
 
 	neck = Node3D.new()
 	neck.position = Vector3(0, 0.49, 0)
@@ -231,56 +359,61 @@ func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, s
 	head.position = Vector3(0, 0.07, 0)
 	neck.add_child(head)
 	_mi(head, _sph(0.13), m_face, Vector3(0, 0.11, 0.015), Vector3.ZERO, Vector3(0.92, 1.08, 1.0))
-	_mi(head, _box(0.16, 0.04, 0.04), m_skin, Vector3(0, 0.15, 0.13), Vector3.ZERO, Vector3.ONE, false)
+	# Rounded face mask over the lower face.
+	_mi(head, _sph(0.1), m_mask, Vector3(0, 0.055, 0.085), Vector3.ZERO, Vector3(1.0, 0.62, 0.75), false)
 	part_helmet = Node3D.new()
-	# Larger helmet: scale the whole helmet group up around the head.
 	part_helmet.scale = Vector3.ONE * 1.32
 	part_helmet.position = Vector3(0, -0.035, 0.0)
 	head.add_child(part_helmet)
-	_mi(part_helmet, _sph(0.122), m_helm, Vector3(0, 0.15, -0.005), Vector3.ZERO, Vector3(1.0, 0.8, 1.06))
-	_mi(part_helmet, _box(0.21, 0.025, 0.05), m_helm, Vector3(0, 0.135, 0.1), Vector3.ZERO, Vector3.ONE, false)
+	# Smooth helmet dome, rounded brim, and ear-pro cups.
+	_mi(part_helmet, _sph(0.122), m_helm, Vector3(0, 0.15, -0.005), Vector3.ZERO, Vector3(1.0, 0.86, 1.06))
+	_mi(part_helmet, _rbox(0.2, 0.03, 0.06, 0.014), m_helm, Vector3(0, 0.135, 0.1), Vector3.ZERO, Vector3.ONE, false)
 	var m_visor := m_dark
 	if visor.v > 0.01:
 		m_visor = _mat(Color(0.05, 0.05, 0.05), 0.3)
 		m_visor.emission = visor
 		m_visor.emission_energy_multiplier = 2.2
 		glow_mats.append(m_visor)
-	_mi(part_helmet, _box(0.15, 0.036, 0.02), m_visor, Vector3(0, 0.122, 0.118), Vector3.ZERO, Vector3.ONE, false)
-	# High-cut shroud + flipped-up night-vision tubes.
-	_mi(part_helmet, _box(0.06, 0.04, 0.03), m_dark, Vector3(0, 0.19, 0.115), Vector3.ZERO, Vector3.ONE, false)
-	_mi(part_helmet, _cyl(0.017, 0.07), m_dark, Vector3(0.026, 0.225, 0.118), Vector3(-0.5, 0, 0), Vector3.ONE, false)
-	_mi(part_helmet, _cyl(0.017, 0.07), m_dark, Vector3(-0.026, 0.225, 0.118), Vector3(-0.5, 0, 0), Vector3.ONE, false)
-	_mi(part_helmet, _box(0.05, 0.012, 0.16), m_gear, Vector3(0.09, 0.2, 0), Vector3(0, 0, -0.5), Vector3.ONE, false)
-	_mi(part_helmet, _box(0.05, 0.012, 0.16), m_gear, Vector3(-0.09, 0.2, 0), Vector3(0, 0, 0.5), Vector3.ONE, false)
-	_mi(part_helmet, _box(0.2, 0.1, 0.06), m_helm, Vector3(0, 0.085, -0.085), Vector3(0.25, 0, 0), Vector3.ONE, false)
-	_mi(part_helmet, _box(0.17, 0.08, 0.05), m_gear, Vector3(0, 0.02, -0.07), Vector3.ZERO, Vector3.ONE, false)
-	_mi(part_helmet, _box(0.04, 0.07, 0.075), m_gear, Vector3(0.112, 0.09, 0), Vector3.ZERO, Vector3.ONE, false)
-	_mi(part_helmet, _box(0.04, 0.07, 0.075), m_gear, Vector3(-0.112, 0.09, 0), Vector3.ZERO, Vector3.ONE, false)
+	_mi(part_helmet, _rbox(0.15, 0.036, 0.02, 0.01), m_visor, Vector3(0, 0.122, 0.118), Vector3.ZERO, Vector3.ONE, false)
+	_mi(part_helmet, _rbox(0.06, 0.04, 0.03, 0.012), m_dark, Vector3(0, 0.19, 0.115), Vector3.ZERO, Vector3.ONE, false)
+	_mi(part_helmet, _cap(0.017, 0.07), m_dark, Vector3(0.026, 0.225, 0.118), Vector3(-0.5, 0, 0), Vector3.ONE, false)
+	_mi(part_helmet, _cap(0.017, 0.07), m_dark, Vector3(-0.026, 0.225, 0.118), Vector3(-0.5, 0, 0), Vector3.ONE, false)
+	_mi(part_helmet, _rbox(0.05, 0.014, 0.16, 0.006), m_gear, Vector3(0.09, 0.2, 0), Vector3(0, 0, -0.5), Vector3.ONE, false)
+	_mi(part_helmet, _rbox(0.05, 0.014, 0.16, 0.006), m_gear, Vector3(-0.09, 0.2, 0), Vector3(0, 0, 0.5), Vector3.ONE, false)
+	_mi(part_helmet, _rbox(0.2, 0.1, 0.06, 0.03), m_helm, Vector3(0, 0.085, -0.085), Vector3(0.25, 0, 0), Vector3.ONE, false)
+	_mi(part_helmet, _rbox(0.17, 0.08, 0.05, 0.025), m_gear, Vector3(0, 0.02, -0.07), Vector3.ZERO, Vector3.ONE, false)
+	_mi(part_helmet, _sph(0.055), m_gear, Vector3(0.112, 0.09, 0), Vector3.ZERO, Vector3(0.62, 1.0, 1.15), false)
+	_mi(part_helmet, _sph(0.055), m_gear, Vector3(-0.112, 0.09, 0), Vector3.ZERO, Vector3(0.62, 1.0, 1.15), false)
 
 	for i in 2:
 		var ua := Node3D.new()
 		spine.add_child(ua)
-		_mi(ua, _cap(0.085, LEN_UPPER + 0.12), m_top, Vector3.ZERO)
+		# Upper arm: shoulder to elbow with a slight bicep bulge.
+		_mi(ua, _limb("uarm", LEN_UPPER + 0.12, [[0.0, 0.082], [0.3, 0.098], [0.7, 0.085], [1.0, 0.07]]), m_top, Vector3.ZERO)
 		var fa := Node3D.new()
 		spine.add_child(fa)
-		_mi(fa, _cap(0.072, LEN_FORE + 0.09), m_top, Vector3.ZERO)
-		_mi(fa, _box(0.1, 0.12, 0.1), m_gear, Vector3(0, -0.04, 0), Vector3.ZERO, Vector3.ONE, false)
+		# Rounded elbow joint, then the forearm (flares near the elbow, tapers to the wrist).
+		_mi(fa, _sph(0.078), m_top, Vector3(0, -LEN_FORE * 0.5, 0))
+		_mi(fa, _limb("farm", LEN_FORE + 0.09, [[0.0, 0.072], [0.3, 0.08], [0.7, 0.066], [1.0, 0.058]]), m_top, Vector3.ZERO)
+		_mi(fa, _rbox(0.11, 0.12, 0.11, 0.045), m_gear, Vector3(0, -0.04, 0), Vector3.ZERO, Vector3.ONE, false)
 		var hd := Node3D.new()
 		spine.add_child(hd)
-		_mi(hd, _box(0.09, 0.12, 0.11), m_glove, Vector3(0, -0.01, 0.0))
+		# Rounded glove with a knuckle bulge.
+		_mi(hd, _rbox(0.095, 0.12, 0.11, 0.045), m_glove, Vector3(0, -0.01, 0.0))
+		_mi(hd, _sph(0.052), m_glove, Vector3(0, -0.04, 0.05), Vector3.ZERO, Vector3(1.0, 0.8, 0.9), false)
 		upper_arms.append(ua)
 		fore_arms.append(fa)
 		hands.append(hd)
 
 	gun = Node3D.new()
 	spine.add_child(gun)
-	_mi(gun, _box(0.06, 0.09, 0.4), m_gun, Vector3(0, 0.045, 0.07))
-	_mi(gun, _box(0.066, 0.07, 0.22), m_gun, Vector3(0, 0.04, 0.33))
-	_mi(gun, _cyl(0.014, 0.2), m_dark, Vector3(0, 0.045, 0.53), Vector3(PI * 0.5, 0, 0), Vector3.ONE, false)
-	_mi(gun, _box(0.05, 0.1, 0.2), m_gun, Vector3(0, 0.02, -0.19))
-	_mi(gun, _box(0.048, 0.15, 0.07), m_dark, Vector3(0, -0.07, 0.13), Vector3(-0.2, 0, 0), Vector3.ONE, false)
-	_mi(gun, _box(0.04, 0.11, 0.05), m_dark, Vector3(0, -0.05, -0.005), Vector3(0.35, 0, 0), Vector3.ONE, false)
-	_mi(gun, _box(0.045, 0.05, 0.12), m_dark, Vector3(0, 0.12, 0.05), Vector3.ZERO, Vector3.ONE, false)
+	_mi(gun, _rbox(0.06, 0.09, 0.4, 0.022), m_gun, Vector3(0, 0.045, 0.07))
+	_mi(gun, _rbox(0.066, 0.07, 0.22, 0.022), m_gun, Vector3(0, 0.04, 0.33))
+	_mi(gun, _cap(0.014, 0.2), m_dark, Vector3(0, 0.045, 0.53), Vector3(PI * 0.5, 0, 0), Vector3.ONE, false)
+	_mi(gun, _rbox(0.05, 0.1, 0.2, 0.02), m_gun, Vector3(0, 0.02, -0.19))
+	_mi(gun, _rbox(0.048, 0.15, 0.07, 0.02), m_dark, Vector3(0, -0.07, 0.13), Vector3(-0.2, 0, 0), Vector3.ONE, false)
+	_mi(gun, _rbox(0.04, 0.11, 0.05, 0.018), m_dark, Vector3(0, -0.05, -0.005), Vector3(0.35, 0, 0), Vector3.ONE, false)
+	_mi(gun, _rbox(0.045, 0.05, 0.12, 0.02), m_dark, Vector3(0, 0.12, 0.05), Vector3.ZERO, Vector3.ONE, false)
 	grip_r = _marker(gun, Vector3(0, -0.04, 0.0))
 	grip_l = _marker(gun, Vector3(0, 0.0, 0.31))
 	mag_pt = _marker(gun, Vector3(0, -0.13, 0.13))

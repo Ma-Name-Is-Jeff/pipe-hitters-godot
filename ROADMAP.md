@@ -30,6 +30,7 @@ None of items 2–6 are started. This is a docs-only note.
 | v1e | Touch controls: FIRE stays ~2x v1c, other buttons and the stick 1.6x, semi-transparent, tighter right cluster | live |
 | v1f | Pause/TUNE sliders for button size (50–150%, default 100%) and opacity (20–100%, default 50%), persisted, live preview | live |
 | v1g | Fluid soldier rig: thicker action-figure build, turret spine twist (pelvis follows velocity, chest/rifle follow aim, clamp ~90°), forward/backpedal/strafe gait blend driven by distance (no foot skate), bob, weight shift, lean spring, idle breathing, rifle bob lag + fire kick. Anim tuning tab | live |
+| v1h | Soldier look: rounded, smooth chunky rebuild (tapered bulging limbs, round joints, beveled plate carrier, dome helmet + ear-pro, face mask, gloves, boots), rim light, shared meshes. Visual only, rig/animation unchanged | local |
 | later | Bake Bran's tuned values in as the defaults (once he sends them from the Copy values button) | todo |
 | later | Hard mode: enemies take ~1s or 10 hits to down (whichever is longer) | todo |
 
