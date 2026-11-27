@@ -44,7 +44,7 @@ func run() -> void:
 	await wait(0.25)
 	var ui: GameUI = main.ui
 
-	ok("version v1d", TuneDefs.VERSION == "v1d")
+	ok("version current", TuneDefs.VERSION.begins_with("v1"))
 	ok("Snappy default is 8 hits", int(main._enemy_hp()) == 8)
 	ok("settle default 0.3s", is_equal_approx(main._t("settle_time"), 0.3))
 	ok("flash default cut ~60%", is_equal_approx(main._t("flash_size"), 0.6))
@@ -61,7 +61,7 @@ func run() -> void:
 	var H: float = s.y
 	var fire: Control = ui.tbtns["fire"]
 	var fire_s: float = fire.size.x
-	ok("FIRE at least 22% of height (2x v1c)", fire_s >= 0.22 * H - 0.5 and fire_s >= 299.0, "FIRE=%.1f  22%%=%.1f  screen=%s" % [fire_s, 0.22 * H, s])
+	ok("FIRE about 2x v1c (slight trim OK)", fire_s >= 0.22 * H - 0.5 and fire_s >= 270.0 and fire_s <= 300.5, "FIRE=%.1f  22%%=%.1f  screen=%s" % [fire_s, 0.22 * H, s])
 	var smalls := ["sprint", "reload", "grenade", "slide", "vault", "pause", "view", "tune"]
 	var small_ok := true
 	var small_detail := []
@@ -72,8 +72,8 @@ func run() -> void:
 		if sz + 0.5 < min_s:
 			small_ok = false
 		small_detail.append("%s=%.0f" % [k, sz])
-	ok("small buttons at least 12% / 48dp and 2x v1c", small_ok, ", ".join(small_detail) + "  min=%.0f" % maxf(0.12 * H, 48.0 * H / 390.0))
-	ok("left stick 2x (radius >= 132)", ui.stick_radius() >= 131.5, "r=%.1f" % ui.stick_radius())
+	ok("small buttons at least 12% / 48dp and ~1.6x v1c", small_ok, ", ".join(small_detail) + "  min=%.0f" % maxf(0.12 * H, 48.0 * H / 390.0))
+	ok("left stick ~1.6x (radius >= 105)", ui.stick_radius() >= 104.5 and ui.stick_radius() <= 120.0, "r=%.1f" % ui.stick_radius())
 
 	var pad := 1.0
 	var names: Array = ["fire", "sprint", "reload", "grenade", "slide", "vault", "pause", "view", "tune"]

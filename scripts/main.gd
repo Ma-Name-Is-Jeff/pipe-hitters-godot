@@ -2680,6 +2680,8 @@ func _update_hud() -> void:
 	var w := _cur_wep()
 	ui.ammo_label.text = "%d / %d" % [mag, reserve]
 	ui.set_mag(mag, int(w["mag"]))
+	ui.set_btn_pressed("fire", fire_held)
+	ui.set_btn_pressed("sprint", sprint_held)
 	ui.wep_label.text = String(w["short"])
 	ui.low_label.visible = mag <= int(w["mag"]) / 4 and reload_t <= 0.0
 	ui.cover_label.visible = in_cover

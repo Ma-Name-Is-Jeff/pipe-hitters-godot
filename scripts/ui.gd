@@ -19,6 +19,7 @@ signal reset_view
 signal setting_changed(key: String, value: Variant)
 
 const STICK_R := 66.0
+const BTN_IDLE_A := 0.50
 
 var root: Control
 var hud: Control
@@ -54,6 +55,7 @@ var mag_bar: MagBar
 var toast_label: Label
 var toast_t := 0.0
 var test_size := Vector2.ZERO
+var btn_held := {}
 var btn_mode := true
 var hud_bottom := true
 var pause_mode_btn: Button
@@ -388,15 +390,16 @@ func _dp(dp: float) -> float:
 	return dp * vis.y / win.y
 
 
-## 2x the v1c control sizes, scaled with screen height, with thumb-size floors.
+## FIRE ~2x v1c (slightly trimmed), other touch controls and the stick 1.6x, with thumb-size floors.
 func touch_metrics() -> Dictionary:
 	var s := screen_size()
 	var h := maxf(s.y, 1.0)
-	var k := (h / 720.0) * 2.0
+	var k_fire := (h / 720.0) * 1.92  # ~2x, trimmed a little so the cluster can sit in the corner
+	var k := (h / 720.0) * 1.6
 	var min_fire := maxf(0.22 * h, _dp(48.0))
 	var min_small := maxf(0.12 * h, _dp(48.0))
 	var d := {
-		"fire": maxf(150.0 * k, min_fire),
+		"fire": maxf(150.0 * k_fire, min_fire),
 		"vault": maxf(92.0 * k, min_small),
 		"slide": maxf(92.0 * k, min_small),
 		"swap": maxf(78.0 * k, min_small),
@@ -407,8 +410,8 @@ func touch_metrics() -> Dictionary:
 		"view": maxf(56.0 * k, min_small),
 		"tune": maxf(56.0 * k, min_small),
 		"stick": maxf(66.0 * k, min_small * 0.5),
-		"margin": maxf(_dp(10.0), 0.018 * h),
-		"gap": maxf(_dp(12.0), 0.032 * h),
+		"margin": maxf(_dp(8.0), 0.016 * h),
+		"gap": maxf(_dp(8.0), 0.02 * h),
 	}
 	return d
 
@@ -426,6 +429,7 @@ func _set_btn_size(k: String, size: float) -> void:
 		var l := p.get_child(0) as Label
 		if l:
 			l.add_theme_font_size_override("font_size", int(clampf(size * 0.22, 16.0, 42.0)))
+	_apply_btn_mod(k)
 
 
 func _btn_center(k: String) -> Vector2:
@@ -576,21 +580,21 @@ func _layout() -> void:
 	if btn_mode:
 		var fire: float = float(m["fire"])
 		var fr := fire * 0.5
-		# Leave a little room on the right so GRN can sit above-right of FIRE.
-		var fc := Vector2(s.x - margin - fr - 52.0, s.y - margin - fr - 72.0)
+		# Tuck FIRE into the bottom-right corner so more of the playfield stays visible.
+		var fc := Vector2(s.x - margin - fr, s.y - margin - fr)
 		# Stay to the right of the bottom HUD.
 		if hud.size.x > 1.0:
 			fc.x = maxf(fc.x, hud.position.x + hud.size.x + fr + gap)
-			fc.x = minf(fc.x, s.x - margin - fr - 52.0)
+			fc.x = minf(fc.x, s.x - margin - fr)
 		_place_btn("fire", fc)
-		# Satellites in a wide arc left and above FIRE so 2x sizes don't overlap.
+		# Compact arc hugging FIRE, biased toward the corner.
 		var arc := [
-			["sprint", deg_to_rad(215.0)],
-			["slide", deg_to_rad(172.0)],
-			["vault", deg_to_rad(134.0)],
-			["reload", deg_to_rad(98.0)],
-			["grenade", deg_to_rad(60.0)],
-			["swap", deg_to_rad(248.0)],
+			["sprint", deg_to_rad(210.0)],
+			["slide", deg_to_rad(168.0)],
+			["vault", deg_to_rad(128.0)],
+			["reload", deg_to_rad(95.0)],
+			["grenade", deg_to_rad(62.0)],
+			["swap", deg_to_rad(246.0)],
 		]
 		for item in arc:
 			var kk: String = item[0]
@@ -653,13 +657,29 @@ func touch_button_at(p: Vector2) -> String:
 	return ""
 
 
+func set_btn_pressed(k: String, on: bool) -> void:
+	btn_held[k] = on
+	_apply_btn_mod(k)
+
+
+func _apply_btn_mod(k: String) -> void:
+	var c: Control = tbtns.get(k)
+	if c == null:
+		return
+	var a := 1.0 if bool(btn_held.get(k, false)) else BTN_IDLE_A
+	c.modulate = Color(1, 1, 1, a)
+
+
 func flash_button(k: String) -> void:
 	var c: Control = tbtns.get(k)
 	if c == null:
 		return
-	c.modulate = Color(1.6, 1.4, 0.9)
+	if bool(btn_held.get(k, false)):
+		_apply_btn_mod(k)
+		return
+	c.modulate = Color(1, 1, 1, 1)
 	var tw := create_tween()
-	tw.tween_property(c, "modulate", Color.WHITE, 0.18)
+	tw.tween_property(c, "modulate", Color(1, 1, 1, BTN_IDLE_A), 0.2)
 
 
 func set_hp(frac: float) -> void:

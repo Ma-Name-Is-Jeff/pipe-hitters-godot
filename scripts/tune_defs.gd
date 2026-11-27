@@ -5,7 +5,7 @@ extends RefCounted
 ## Each item has a Snappy default ("def", the shipping default) and a Classic value ("cls",
 ## the pre-v1b feel). Toggles are 0/1 sliders flagged "toggle".
 
-const VERSION := "v1d"
+const VERSION := "v1e"
 
 static var _groups: Array = []
 
