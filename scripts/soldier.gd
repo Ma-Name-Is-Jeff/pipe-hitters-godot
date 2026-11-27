@@ -11,6 +11,8 @@ const LEN_FORE := 0.31
 const SHOULDER_L := Vector3(0.25, 0.46, 0.02)
 const SHOULDER_R := Vector3(-0.25, 0.46, -0.02)
 const GUN_AIM_POS := Vector3(-0.13, 0.43, 0.34)
+## v1i model: rifle butt in the right shoulder pocket, elbows bent (real-scale rifle).
+const MODEL_GUN_AIM_POS := Vector3(-0.1, 0.4, 0.38)
 const GUN_READY_POS := Vector3(-0.08, 0.29, 0.31)
 const GUN_READY_ROT := Vector3(0.5, 0.42, 0.18)
 const AIM_TWIST := -0.3
@@ -29,6 +31,29 @@ static func set_anim(d: Dictionary) -> void:
 		var sk: String = "anim_" + k
 		if d.has(sk):
 			anim[k] = float(d[sk])
+	if d.has("classic_rig"):
+		use_model = float(d["classic_rig"]) < 0.5
+
+
+## v1i: skinned Blender model (art/models) driven by this procedural rig. "Classic rig" = old look.
+static var use_model := true
+static var _soldier_scene: PackedScene
+static var _rifle_scene: PackedScene
+const PALM_OFF := 0.06
+var model: Node3D
+var skel: Skeleton3D
+var model_mesh: MeshInstance3D
+var rifle: Node3D
+var _skel_xf := Transform3D.IDENTITY
+var _bi := {}        ## bone name -> index
+var _rest := {}      ## bone name -> rest transform in soldier-root space
+var _model_on := false
+var _order: Array[String] = []
+var _classic_meshes: Array[Node3D] = []
+var _marker_classic := {}
+var _marker_model := {}
+var model_palm := [Vector3.ZERO, Vector3.ZERO]  ## last solved palm points (root space), for tests
+var model_target := [Vector3.ZERO, Vector3.ZERO]
 
 var body: Node3D
 var hips: Node3D
@@ -418,6 +443,9 @@ func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, s
 	grip_l = _marker(gun, Vector3(0, 0.0, 0.31))
 	mag_pt = _marker(gun, Vector3(0, -0.13, 0.13))
 	muzzle = _marker(gun, Vector3(0, 0.045, 0.64))
+	for n in body.find_children("*", "MeshInstance3D", true, false):
+		_classic_meshes.append(n)
+	_build_model(top, bottom, vest, helmet, gear, face, visor)
 	pose(1.0, 0.0, 0.0, 0.0, 0.0, false, -1.0, false, false, -1.0)
 
 
@@ -698,7 +726,7 @@ func pose(dt: float, spd: float, bob: float, slide_mix: float, slide_side: float
 	head.rotation = Vector3(-spx * 0.7, -twist * 0.9, -spz * 0.5)
 
 	# Gun: low ready <-> shouldered, lagged bob + kick spring.
-	var gp := GUN_READY_POS.lerp(GUN_AIM_POS, k_aim)
+	var gp := GUN_READY_POS.lerp(MODEL_GUN_AIM_POS if _model_on else GUN_AIM_POS, k_aim)
 	var gr := GUN_READY_ROT.lerp(Vector3(-spx, -twist, 0), k_aim)
 	var sway: float = float(anim["sway"])
 	gun_bob_lag = _ease(gun_bob_lag, bob_off, 10.0, dt)
@@ -732,6 +760,210 @@ func pose(dt: float, spd: float, bob: float, slide_mix: float, slide_side: float
 	# Elbows flare out a little when aiming (chunky T from above).
 	_ik(1, SHOULDER_R, tgt_r, SHOULDER_R + Vector3(-0.32, -0.34, -0.12).lerp(Vector3(-0.55, -0.12, -0.08), k_aim), gt.basis)
 	_ik(0, SHOULDER_L, tgt_l, SHOULDER_L + Vector3(0.22, -0.4, 0.02).lerp(Vector3(0.5, -0.18, 0.06), k_aim), gt.basis)
+	if use_model != _model_on:
+		_apply_mode(use_model)
+	if _model_on:
+		_drive_model()
+
+
+func _build_model(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, face: Color, visor: Color) -> void:
+	if _soldier_scene == null:
+		_soldier_scene = load("res://art/models/soldier.glb")
+		_rifle_scene = load("res://art/models/rifle.glb")
+	if _soldier_scene == null or _rifle_scene == null:
+		return
+	model = _soldier_scene.instantiate()
+	add_child(model)
+	skel = model.find_children("*", "Skeleton3D", true, false)[0]
+	model_mesh = skel.find_children("*", "MeshInstance3D", true, false)[0]
+	var t := Transform3D.IDENTITY
+	var n: Node = skel
+	while n != self:
+		t = (n as Node3D).transform * t
+		n = n.get_parent()
+	_skel_xf = t
+	for i in skel.get_bone_count():
+		var nm := skel.get_bone_name(i)
+		_bi[nm] = i
+		_rest[nm] = _skel_xf * skel.get_bone_global_rest(i)
+		_order.append(nm)
+	# Team materials (per soldier so the hit flash stays per soldier; meshes are shared).
+	var cols := {
+		"uniform_top": [top, 0.9], "uniform_pants": [bottom, 0.92], "gloves": [Color(0.13, 0.12, 0.11), 0.6],
+		"boots": [Color(0.1, 0.09, 0.085), 0.5], "mask": [face, 0.95], "helmet": [helmet.lightened(0.06), 0.42],
+	}
+	var m_top := _mat(top, 0.9)
+	m_top.albedo_color = top.lightened(0.04)
+	var mesh := model_mesh.mesh
+	for i in mesh.get_surface_count():
+		var src := mesh.surface_get_material(i)
+		var key := src.resource_name if src else ""
+		var mt: StandardMaterial3D
+		if key == "visor":
+			mt = _mat(Color(0.04, 0.04, 0.05), 0.2)
+			if visor.v > 0.01:
+				mt.emission = visor
+				mt.emission_energy_multiplier = 2.4
+				glow_mats.append(mt)
+		elif key == "uniform_top":
+			mt = m_top
+		elif cols.has(key):
+			mt = _mat(cols[key][0], cols[key][1])
+		else:
+			mt = _mat(gear, 0.8)
+		model_mesh.set_surface_override_material(i, mt)
+	rifle = _rifle_scene.instantiate()
+	gun.add_child(rifle)
+	var rm: Node3D = rifle.find_children("Rifle", "MeshInstance3D", true, false)[0]
+	for mk in [["grip", grip_r], ["support", grip_l], ["muzzle", muzzle]]:
+		var node: Node3D = rm.get_node(mk[0])
+		_marker_classic[mk[0]] = (mk[1] as Node3D).position
+		_marker_model[mk[0]] = rifle.transform * rm.transform * node.transform.origin
+	_model_on = not use_model
+	_apply_mode(use_model)
+
+
+func _apply_mode(on: bool) -> void:
+	if model == null:
+		on = false
+	if on == _model_on:
+		return
+	_model_on = on
+	for m in _classic_meshes:
+		m.visible = not on
+	if model:
+		model.visible = on
+		rifle.visible = on
+	var src := _marker_model if on else _marker_classic
+	if not src.is_empty():
+		grip_r.position = src["grip"]
+		grip_l.position = src["support"]
+		muzzle.position = src["muzzle"]
+
+
+func model_active() -> bool:
+	return _model_on
+
+
+static func _frame(d: Vector3, n: Vector3) -> Basis:
+	var x := d.normalized()
+	var y := n - x * n.dot(x)
+	if y.length() < 1e-4:
+		y = x.cross(Vector3.UP if absf(x.y) < 0.9 else Vector3.RIGHT)
+	y = y.normalized()
+	return Basis(x, y, x.cross(y))
+
+
+func _setg(name: String, g: Transform3D) -> void:
+	skel.set_bone_global_pose(_bi[name], _skel_xf.affine_inverse() * g)
+
+
+## FK: child joint position from the parent's current global and rest offsets.
+func _fk(parent: String, child: String, gp: Transform3D) -> Vector3:
+	var rp: Transform3D = _rest[parent]
+	var rc: Transform3D = _rest[child]
+	return gp * (rp.affine_inverse() * rc.origin)
+
+
+func _drive_model() -> void:
+	var hh := body.transform * hips.transform
+	var sp := hh * spine.transform
+	var nk := sp * neck.transform
+	var hd := nk * head.transform
+	var gt := sp * gun.transform
+	var g := {}
+	var hq := hh.basis.get_rotation_quaternion()
+	var sq_rel := spine.transform.basis.get_rotation_quaternion()
+	g["hips"] = Transform3D(hh.basis * (_rest["hips"] as Transform3D).basis, hh.origin + hh.basis * ((_rest["hips"] as Transform3D).origin - Vector3(0, HIP_Y, 0)))
+	var chain := [["spine", "hips", 1.0 / 3.0], ["spine1", "spine", 2.0 / 3.0], ["chest", "spine1", 1.0]]
+	for c in chain:
+		var q := hq * Quaternion.IDENTITY.slerp(sq_rel, c[2])
+		g[c[0]] = Transform3D(Basis(q) * (_rest[c[0]] as Transform3D).basis, _fk(c[1], c[0], g[c[1]]))
+	g["neck"] = Transform3D(nk.basis * (_rest["neck"] as Transform3D).basis, _fk("chest", "neck", g["chest"]))
+	g["head"] = Transform3D(hd.basis * (_rest["head"] as Transform3D).basis, _fk("neck", "head", g["neck"]))
+	for i in 2:
+		var sd := "L" if i == 0 else "R"
+		var th := hh * thighs[i].transform
+		var kn := th * knees[i].transform
+		var ft := kn * feet[i].transform
+		g["thigh." + sd] = Transform3D(th.basis * (_rest["thigh." + sd] as Transform3D).basis, _fk("hips", "thigh." + sd, g["hips"]))
+		g["shin." + sd] = Transform3D(kn.basis * (_rest["shin." + sd] as Transform3D).basis, _fk("thigh." + sd, "shin." + sd, g["thigh." + sd]))
+		g["foot." + sd] = Transform3D(ft.basis * (_rest["foot." + sd] as Transform3D).basis, _fk("shin." + sd, "foot." + sd, g["shin." + sd]))
+		g["toe." + sd] = Transform3D(ft.basis * (_rest["toe." + sd] as Transform3D).basis, _fk("foot." + sd, "toe." + sd, g["foot." + sd]))
+		var cl := "clavicle." + sd
+		g[cl] = Transform3D(sp.basis * (_rest[cl] as Transform3D).basis, _fk("chest", cl, g["chest"]))
+		_arm(i, sd, g, sp, gt)
+	# Local poses from our own globals (parent first), so nothing depends on lazily updated globals.
+	var inv := _skel_xf.affine_inverse()
+	for b in _order:
+		var bi: int = _bi[b]
+		var gb: Transform3D = inv * (g[b] as Transform3D)
+		var pi := skel.get_bone_parent(bi)
+		var lt := gb
+		if pi >= 0:
+			lt = (inv * (g[skel.get_bone_name(pi)] as Transform3D)).affine_inverse() * gb
+		skel.set_bone_pose_position(bi, lt.origin)
+		skel.set_bone_pose_rotation(bi, lt.basis.orthonormalized().get_rotation_quaternion())
+
+
+## Two-bone IK for the model arm: palm onto the driver hand target, hand oriented on the rifle.
+func _arm(i: int, sd: String, g: Dictionary, sp: Transform3D, gt: Transform3D) -> void:
+	var ua := "upper_arm." + sd
+	var fa := "forearm." + sd
+	var hn := "hand." + sd
+	var r_ua: Transform3D = _rest[ua]
+	var r_fa: Transform3D = _rest[fa]
+	var r_hn: Transform3D = _rest[hn]
+	var l1 := r_ua.origin.distance_to(r_fa.origin)
+	var l2 := r_fa.origin.distance_to(r_hn.origin)
+	var d0 := (r_fa.origin - r_ua.origin).normalized()
+	var e0 := (r_hn.origin - r_fa.origin).normalized()
+	var n0 := d0.cross(e0).normalized()
+	var s := _fk("clavicle." + sd, ua, g["clavicle." + sd])
+	var target := sp * hands[i].transform.origin
+	# Hand direction on the rifle (gun basis): trigger hand down/forward along the grip,
+	# support hand forward under the handguard, fingers wrapping toward the centerline.
+	var gb := gt.basis
+	var dh: Vector3
+	var up_ref: Vector3
+	if i == 1:
+		dh = (gb * Vector3(0.12, -0.62, 0.78)).normalized()
+		up_ref = gb * Vector3(-1, 0, 0)
+	else:
+		dh = (gb * Vector3(-0.45, 0.1, 0.89)).normalized()
+		up_ref = gb * Vector3(0, -1, 0)
+	var wrist := target - dh * PALM_OFF
+	model_target[i] = target
+	var d := wrist - s
+	var dist := clampf(d.length(), 0.05, l1 + l2 - 0.001)
+	var dir := d.normalized()
+	# Elbows down and slightly out (flare a little more when aiming).
+	var pole_l := SHOULDER_L + Vector3(0.2, -0.5, 0.0).lerp(Vector3(0.3, -0.45, 0.05), k_aim)
+	var pole_r := SHOULDER_R + Vector3(-0.25, -0.5, -0.1).lerp(Vector3(-0.42, -0.38, -0.05), k_aim)
+	var pole := sp * (pole_l if i == 0 else pole_r)
+	var ca := clampf((l1 * l1 + dist * dist - l2 * l2) / (2.0 * l1 * dist), -1.0, 1.0)
+	var pd := pole - s
+	pd = pd - dir * pd.dot(dir)
+	if pd.length() < 1e-4:
+		pd = Vector3.DOWN
+	pd = pd.normalized()
+	var elbow := s + dir * (l1 * ca) + pd * (l1 * sqrt(maxf(0.0, 1.0 - ca * ca)))
+	var wr := s + dir * dist
+	var d1 := (elbow - s).normalized()
+	var e1 := (wr - elbow).normalized()
+	var n1 := d1.cross(e1)
+	if n1.length() < 1e-3:
+		n1 = d1.cross(pd)
+	n1 = n1.normalized()
+	if n1.dot(sp.basis * n0) < -0.2:
+		n1 = n1  # keep IK bend; rest normal is only a reference
+	var q_ua := _frame(d1, n1) * _frame(d0, n0).inverse()
+	var q_fa := _frame(e1, n1) * _frame(e0, n0).inverse()
+	g[ua] = Transform3D(q_ua * r_ua.basis, s)
+	g[fa] = Transform3D(q_fa * r_fa.basis, elbow)
+	var q_hn := _frame(dh, up_ref) * _frame(e0, n0).inverse()
+	g[hn] = Transform3D(q_hn * r_hn.basis, wr)
+	model_palm[i] = wr + dh * PALM_OFF
 
 
 ## Two-bone IK in spine space. Places the segment nodes between joints.

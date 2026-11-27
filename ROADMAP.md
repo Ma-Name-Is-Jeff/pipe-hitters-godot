@@ -31,6 +31,7 @@ None of items 2–6 are started. This is a docs-only note.
 | v1f | Pause/TUNE sliders for button size (50–150%, default 100%) and opacity (20–100%, default 50%), persisted, live preview | live |
 | v1g | Fluid soldier rig: thicker action-figure build, turret spine twist (pelvis follows velocity, chest/rifle follow aim, clamp ~90°), forward/backpedal/strafe gait blend driven by distance (no foot skate), bob, weight shift, lean spring, idle breathing, rifle bob lag + fire kick. Anim tuning tab | live |
 | v1h | Soldier look: rounded, smooth chunky rebuild (tapered bulging limbs, round joints, beveled plate carrier, dome helmet + ear-pro, face mask, gloves, boots), rim light, shared meshes. Visual only, rig/animation unchanged | local |
+| v1i | Real 3D model: original Blender-built soldier (one skinned ~7k-tri mesh, 22-bone humanoid rig, auto weights, PBR slots, team colors set in Godot) and original 0.9 m rifle with grip/support/muzzle markers, exported as .glb. Skeleton driven by the v1g animation logic, two-hand IK on the markers, Classic rig fallback toggle in the Anim tab. Sources in `art/src/` (Blender 5.2.5 LTS) | local |
 | later | Bake Bran's tuned values in as the defaults (once he sends them from the Copy values button) | todo |
 | later | Hard mode: enemies take ~1s or 10 hits to down (whichever is longer) | todo |
 

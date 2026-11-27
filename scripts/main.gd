@@ -313,7 +313,7 @@ func _build_bots(specs: Array, out: Array) -> void:
 		var b := Bot.new()
 		b.label = BOT_NAMES[out.size() % BOT_NAMES.size()]
 		b.node = Soldier.new()
-		b.node.setup(Color8(112, 90, 66), Color8(86, 70, 54), Color8(98, 62, 42), Color8(84, 66, 48), Color8(64, 48, 36), Color8(214, 186, 156), Color8(40, 34, 30), Color8(70, 56, 44), Color8(255, 60, 40), Color(0.11, 0.05, 0.02))
+		b.node.setup(Color8(86, 68, 48), Color8(68, 55, 41), Color8(80, 52, 35), Color8(66, 52, 38), Color8(52, 40, 30), Color8(214, 186, 156), Color8(40, 34, 30), Color8(70, 56, 44), Color8(255, 60, 40), Color(0.11, 0.05, 0.02))
 		add_child(b.node)
 		b.home = Vector2(s[0], s[1])
 		b.facing = s[2]

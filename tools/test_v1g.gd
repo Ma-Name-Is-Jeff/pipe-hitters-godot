@@ -51,7 +51,7 @@ func run() -> void:
 	await process_frame
 	main.reset_tuning()
 	main._save_settings()
-	ok("version v1g or later", ["v1g", "v1h"].has(TuneDefs.VERSION))
+	ok("version v1g or later", ["v1g", "v1h", "v1i"].has(TuneDefs.VERSION))
 	var locked := [["move_speed", 6.3], ["accel", 300.0], ["decel", 300.0], ["sprint_speed", 9.5], ["aim_slow", 1.0], ["slide_speed", 11.2], ["slide_dur", 1.74]]
 	var bad := []
 	for kv in locked:
@@ -65,7 +65,7 @@ func run() -> void:
 	var anim_tab := false
 	for g in TuneDefs.groups():
 		if g["name"] == "Anim":
-			anim_tab = g["items"].size() == 7
+			anim_tab = g["items"].size() >= 7
 	ok("Anim tab with 7 sliders", have and anim_tab)
 	Soldier.set_anim(main.settings)
 
