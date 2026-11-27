@@ -13,7 +13,7 @@ from mathutils import Vector, Quaternion, Matrix
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SRC = os.path.join(ROOT, "art", "src")
 OUT = os.path.join(ROOT, "art", "models")
-TARGET_TRIS = 4200
+TARGET_TRIS = 3600
 
 
 def G(x, y, z):
@@ -33,15 +33,15 @@ CHEST = (0.0, 1.30, 0.0)
 NECK = (0.0, 1.53, 0.0)
 HEAD = (0.0, 1.60, 0.0)
 HEAD_TOP = (0.0, 1.86, 0.0)
-CLAV = (0.06, 1.47, 0.0)
-SHOULDER = (0.25, 1.50, 0.02)
-UPPER_LEN, FORE_LEN, HAND_LEN = 0.33, 0.3, 0.17
+CLAV = (0.07, 1.50, 0.0)
+SHOULDER = (0.285, 1.485, 0.02)
+UPPER_LEN, FORE_LEN, HAND_LEN = 0.35, 0.33, 0.17
 ARM_DROP = math.radians(42.0)  # A-pose angle from vertical
-THIGH = (0.125, 0.92, 0.0)
-KNEE = (0.125, 0.48, 0.012)
-ANKLE = (0.125, 0.08, 0.0)
-BALL = (0.125, 0.025, 0.125)
-TOE = (0.125, 0.025, 0.2)
+THIGH = (0.145, 0.92, 0.0)
+KNEE = (0.145, 0.48, 0.012)
+ANKLE = (0.145, 0.08, 0.0)
+BALL = (0.145, 0.025, 0.125)
+TOE = (0.145, 0.025, 0.2)
 
 
 def arm_joints(side):
@@ -156,47 +156,54 @@ def _loft(a, b, keys, seg=20, rings=16, side_hint=(1, 0, 0)):
 
 def build_body():
     PARTS.clear()
-
-    def lerp(a, b, t):
-        return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
-
     ell = _ellipsoid
-    # Torso as one continuous loft (hips -> waist taper -> broad chest -> traps).
+    # Torso as one continuous loft (hips -> waist taper -> broad chest -> neck base).
     _loft((0, 0.83, 0), (0, 1.53, 0), [
-        (0.0, 0.16, 0.105, -0.01),
-        (0.1, 0.205, 0.13, -0.015),
-        (0.2, 0.2, 0.128, -0.01),
-        (0.3, 0.168, 0.122, -0.005),
-        (0.4, 0.158, 0.12, 0.004),
-        (0.56, 0.192, 0.132, 0.006),
-        (0.72, 0.226, 0.152, 0.004),
-        (0.85, 0.232, 0.14, -0.006),
-        (0.93, 0.19, 0.108, -0.015),
-        (1.0, 0.1, 0.08, -0.012),
+        (0.0, 0.19, 0.125, -0.01),
+        (0.1, 0.235, 0.15, -0.015),
+        (0.2, 0.235, 0.15, -0.01),
+        (0.3, 0.205, 0.145, -0.005),
+        (0.4, 0.195, 0.142, 0.004),
+        (0.56, 0.235, 0.155, 0.008),
+        (0.72, 0.268, 0.172, 0.006),
+        (0.85, 0.268, 0.16, -0.004),
+        (0.93, 0.22, 0.125, -0.012),
+        (1.0, 0.12, 0.09, -0.01),
     ], seg=28, rings=24, side_hint=(1, 0, 0))
-    ell((0, 1.385, 0.05), (0.19, 0.08, 0.09))       # pecs
-    for s in (1, -1):
-        ell((0.08 * s, 0.905, -0.05), (0.1, 0.1, 0.09))  # glutes
-    _loft((0, 1.44, -0.012), (0, 1.64, 0.004), [(0, 0.08, 0.076, 0), (0.5, 0.07, 0.066, 0), (1, 0.062, 0.06, 0)])   # strong neck
-    ell((0, 1.715, 0.0), (0.095, 0.118, 0.108))          # skull
-    ell((0, 1.65, 0.03), (0.07, 0.055, 0.074))           # jaw / chin
+    ell((0, 1.385, 0.06), (0.22, 0.09, 0.1))          # pecs
+    for s_ in (1, -1):
+        ell((0.085 * s_, 0.905, -0.05), (0.115, 0.11, 0.1))  # glutes
+    # Shoulder girdle: ONE continuous yoke (trapezius + both deltoid caps) so there is a single
+    # clean shoulder line; the upper arms start with the same radius at the same centre.
+    sh_c = SHOULDER[1] - 0.025
+    _loft((-SHOULDER[0], sh_c, 0.015), (SHOULDER[0], sh_c, 0.015), [(0, 0.09, 0.1, 0), (1, 0.09, 0.1, 0)], seg=24, rings=14, side_hint=(0, 1, 0))
+    for s_ in (1, -1):   # trapezius slope neck -> shoulder
+        _loft((0.0, 1.535, -0.012), (0.2 * s_, 1.465, 0.0), [(0, 0.09, 0.075, 0), (1, 0.09, 0.08, 0)], seg=20, rings=10, side_hint=(0, 0, 1))
+    _loft((0, 1.44, -0.012), (0, 1.66, 0.0), [(0, 0.108, 0.1, 0), (0.45, 0.088, 0.084, 0), (1, 0.082, 0.08, 0)])   # thick neck
+    # Head: skull, brow, face mass, nose, chin, ears. Origin of the head bone stays at (0,1.60,0).
+    ell((0, 1.758, -0.004), (0.113, 0.127, 0.122))        # skull
+    ell((0, 1.769, 0.092), (0.09, 0.016, 0.03))          # brow ridge
+    ell((0, 1.705, 0.03), (0.098, 0.088, 0.09))          # cheeks / jaw (one smooth mass)
+    ell((0, 1.66, 0.068), (0.05, 0.03, 0.036))          # chin
+    for s_ in (1, -1):
+        ell((0.117 * s_, 1.734, -0.008), (0.017, 0.036, 0.025))  # ears
+    _capsule((0, 1.752, 0.104), (0, 1.713, 0.126), 0.016, 0.014)   # nose
     for side in ("L", "R"):
-        s = 1.0 if side == "L" else -1.0
+        s_ = 1.0 if side == "L" else -1.0
         sh, el, wr, hd = [tuple(v) for v in arm_joints(side)]
-        ell((SHOULDER[0] * s - 0.015 * s, 1.47, 0.01), (0.096, 0.09, 0.098))   # deltoid
-        _loft(sh, el, [(0, 0.074, 0.074, 0), (0.42, 0.08, 0.077, 0.005), (1, 0.06, 0.06, 0)])
-        _loft(el, wr, [(0, 0.062, 0.062, 0), (0.25, 0.066, 0.062, 0), (1, 0.046, 0.04, 0)])
+        _loft(sh, el, [(0, 0.098, 0.098, 0), (0.4, 0.097, 0.092, 0.004), (1, 0.074, 0.074, 0)])
+        _loft(el, wr, [(0, 0.075, 0.075, 0), (0.25, 0.082, 0.076, 0), (1, 0.054, 0.048, 0)])
         d = (Vector(hd) - Vector(wr)).normalized()
         palm = Vector(wr) + d * 0.055
-        _loft(tuple(Vector(wr) + d * 0.0), tuple(palm + d * 0.03), [(0, 0.045, 0.03, 0), (1, 0.048, 0.028, 0)])
-        _loft(tuple(palm + d * 0.03), tuple(Vector(wr) + d * 0.15), [(0, 0.044, 0.026, 0), (1, 0.034, 0.02, 0)])
-        _loft(tuple(Vector(wr) + d * 0.03 + Vector((0, 0, 0.028))), tuple(Vector(wr) + d * 0.09 + Vector((0, 0, 0.055))), [(0, 0.019, 0.019, 0), (1, 0.016, 0.016, 0)])
-        _loft(tuple(Vector(wr) - d * 0.035), tuple(Vector(wr) + d * 0.01), [(0, 0.05, 0.05, 0), (1, 0.052, 0.05, 0)])  # glove cuff
+        _loft(tuple(Vector(wr) + d * 0.0), tuple(palm + d * 0.03), [(0, 0.052, 0.035, 0), (1, 0.056, 0.033, 0)])
+        _loft(tuple(palm + d * 0.03), tuple(Vector(wr) + d * 0.15), [(0, 0.05, 0.03, 0), (1, 0.04, 0.024, 0)])
+        _loft(tuple(Vector(wr) + d * 0.03 + Vector((0, 0, 0.03))), tuple(Vector(wr) + d * 0.09 + Vector((0, 0, 0.06))), [(0, 0.022, 0.022, 0), (1, 0.018, 0.018, 0)])
+        _loft(tuple(Vector(wr) - d * 0.035), tuple(Vector(wr) + d * 0.01), [(0, 0.058, 0.057, 0), (1, 0.06, 0.057, 0)])  # glove cuff
         th, kn, an, ba, to = [tuple(v) for v in leg_joints(side)]
-        _loft(th, kn, [(0, 0.1, 0.1, 0), (0.3, 0.118, 0.114, 0.008), (0.85, 0.086, 0.084, 0.0), (1, 0.078, 0.078, 0)])
-        _loft(kn, an, [(0, 0.076, 0.078, 0.006), (0.28, 0.08, 0.088, -0.018), (0.8, 0.06, 0.061, 0), (1, 0.056, 0.056, 0)])
-        _loft((an[0], 0.24, an[2] - 0.005), (an[0], 0.075, an[2]), [(0, 0.07, 0.072, 0), (1, 0.074, 0.076, 0)])   # boot cuff
-        _loft((an[0], 0.06, -0.07), (to[0], 0.055, 0.18), [(0, 0.064, 0.058, 0), (0.6, 0.07, 0.057, 0), (1, 0.058, 0.048, 0)], side_hint=(1, 0, 0))  # boot
+        _loft(th, kn, [(0, 0.115, 0.115, 0), (0.3, 0.138, 0.132, 0.008), (0.85, 0.1, 0.098, 0.0), (1, 0.09, 0.09, 0)])
+        _loft(kn, an, [(0, 0.09, 0.092, 0.006), (0.28, 0.095, 0.104, -0.018), (0.8, 0.07, 0.072, 0), (1, 0.066, 0.066, 0)])
+        _loft((an[0], 0.24, an[2] - 0.005), (an[0], 0.075, an[2]), [(0, 0.082, 0.084, 0), (1, 0.086, 0.088, 0)])   # boot cuff
+        _loft((an[0], 0.06, -0.07), (to[0], 0.055, 0.19), [(0, 0.074, 0.066, 0), (0.6, 0.082, 0.066, 0), (1, 0.068, 0.056, 0)], side_hint=(1, 0, 0))  # boot
 
     bm = bmesh.new()
     me = bpy.data.meshes.new("SoldierMesh")
@@ -213,77 +220,84 @@ def build_body():
     bpy.context.view_layer.objects.active = body
     m = body.modifiers.new("Remesh", "REMESH")
     m.mode = "VOXEL"
-    m.voxel_size = 0.008
+    m.voxel_size = 0.006
     bpy.ops.object.modifier_apply(modifier="Remesh")
     sm = body.modifiers.new("Smooth", "SMOOTH")
     sm.factor = 0.5
-    sm.iterations = 4
+    sm.iterations = 10
     bpy.ops.object.modifier_apply(modifier="Smooth")
     for v in body.data.vertices:   # flat boot soles
         if v.co.z < 0.015:
             v.co.z = max(v.co.z, 0.0) * 0.25
+    # Protect the face and shoulder girdle from decimation.
+    keep = body.vertex_groups.new(name="keep_detail")
+    for v in body.data.vertices:
+        g = Vector((v.co.x, v.co.z, -v.co.y))
+        if g.y > 1.52 and abs(g.x) < 0.14:
+            keep.add([v.index], 0.92, "REPLACE")     # head + neck collar
+        elif g.y > 1.36 and abs(g.x) < 0.42:
+            keep.add([v.index], 0.45, "REPLACE")     # shoulder girdle
     tris = sum(len(p.vertices) - 2 for p in body.data.polygons)
+    print("PRE-DECIMATE tris", tris)
     dec = body.modifiers.new("Decimate", "DECIMATE")
     dec.ratio = min(1.0, TARGET_TRIS / max(tris, 1))
+    dec.vertex_group = "keep_detail"
+    dec.invert_vertex_group = True
+    dec.vertex_group_factor = 1.0
     bpy.ops.object.modifier_apply(modifier="Decimate")
+    body.vertex_groups.remove(body.vertex_groups["keep_detail"])
     for p in body.data.polygons:
         p.use_smooth = True
     return body
 
 
-def build_helmet():
-    bpy.ops.mesh.primitive_uv_sphere_add(segments=28, ring_count=16, radius=1.0, location=gv((0, 1.725, -0.008)))
+def build_hair_eyes():
+    """Short buzz-cut hair shell (own material, distinct from the body from above) + dark eyes."""
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=48, ring_count=32, radius=1.0, location=gv((0, 1.758, -0.004)))
     h = bpy.context.active_object
-    h.name = "Helmet"
-    h.scale = (0.124, 0.136, 0.122)  # blender x, y(depth), z(height)
+    h.name = "Hair"
+    h.scale = (0.12, 0.133, 0.13)  # blender x, y(depth), z(height)
     bpy.ops.object.transform_apply(scale=True)
     bm = bmesh.new()
     bm.from_mesh(h.data)
-    # Cut: brow in front, lower at the sides and back (simple modern cut).
-    kill = []
+    def smooth(a, b, x):
+        t = min(max((x - a) / (b - a), 0.0), 1.0)
+        return t * t * (3 - 2 * t)
+    clamped = set()
     for v in bm.verts:
-        g = Vector((v.co.x, v.co.z, -v.co.y))  # back to godot
-        fwd = g.z  # + = front
-        cut_y = 1.70 + 0.03 * max(0.0, fwd / 0.13) - 0.03 * max(0.0, -fwd / 0.13)
-        if abs(g.x) > 0.08 and fwd > -0.02 and fwd < 0.06:
-            cut_y = 1.665
-        if g.y < cut_y:
-            kill.append(v)
-    bmesh.ops.delete(bm, geom=kill, context="VERTS")
+        g = Vector((v.co.x, v.co.z, -v.co.y))
+        fwd = g.z
+        cut = 1.774 + 0.042 * smooth(0.02, 0.085, fwd) - 0.072 * smooth(-0.01, -0.09, fwd)
+        cut += 0.01 * (1 - smooth(0.0, 0.08, abs(g.x)))   # slightly lower hairline at the temples
+        if g.y < cut:
+            v.co.z = cut   # blender z = godot y
+            clamped.add(v)
+    bmesh.ops.delete(bm, geom=[f for f in bm.faces if all(v in clamped for v in f.verts)], context="FACES")
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
     bm.to_mesh(h.data)
     bm.free()
     so = h.modifiers.new("Solid", "SOLIDIFY")
     so.thickness = 0.014
-    so.offset = 1.0
-    bv = h.modifiers.new("Bevel", "BEVEL")
-    bv.width = 0.004
-    bv.segments = 2
-    bv.limit_method = "ANGLE"
+    so.offset = -1.0
     bpy.ops.object.modifier_apply(modifier="Solid")
-    bpy.ops.object.modifier_apply(modifier="Bevel")
     for p in h.data.polygons:
         p.use_smooth = True
-    # Visor band (team-colored glow in Godot).
-    bpy.ops.mesh.primitive_cylinder_add(vertices=32, radius=1.0, depth=0.03, location=gv((0, 1.705, -0.005)))
-    vz = bpy.context.active_object
-    vz.name = "Visor"
-    vz.scale = (0.104, 0.115, 1.0)
-    bpy.ops.object.transform_apply(scale=True)
-    bm = bmesh.new()
-    bm.from_mesh(vz.data)
-    kill = [v for v in bm.verts if Vector((v.co.x, -v.co.y)).angle(Vector((0, 1))) > math.radians(62)]
-    bmesh.ops.delete(bm, geom=kill, context="VERTS")
-    bm.to_mesh(vz.data)
-    bm.free()
-    so = vz.modifiers.new("Solid", "SOLIDIFY")
-    so.thickness = 0.008
+    # Eyes: small dark ovals on the face.
+    eyes = []
+    for s_ in (1, -1):
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=12, ring_count=8, radius=1.0, location=gv((0.045 * s_, 1.752, 0.107)))
+        e = bpy.context.active_object
+        e.scale = (0.016, 0.009, 0.012)
+        bpy.ops.object.transform_apply(scale=True)
+        for p in e.data.polygons:
+            p.use_smooth = True
+        eyes.append(e)
     bpy.ops.object.select_all(action="DESELECT")
-    vz.select_set(True)
-    bpy.context.view_layer.objects.active = vz
-    bpy.ops.object.modifier_apply(modifier="Solid")
-    for p in vz.data.polygons:
-        p.use_smooth = True
-    return h, vz
+    for e in eyes:
+        e.select_set(True)
+    bpy.context.view_layer.objects.active = eyes[0]
+    bpy.ops.object.join()
+    return h, eyes[0]
 
 
 def mat(name, col, rough, metal=0.0):
@@ -353,7 +367,7 @@ def clean_seams(body):
     """Cut clean edge loops where materials change (waist, boot tops, neck, wrists)."""
     bm = bmesh.new()
     bm.from_mesh(body.data)
-    cuts = [(gv((0, 1.0, 0)), Vector((0, 0, 1))), (gv((0, 0.235, 0)), Vector((0, 0, 1))), (gv((0, 1.535, 0)), Vector((0, 0, 1)))]
+    cuts = [(gv((0, 1.0, 0)), Vector((0, 0, 1))), (gv((0, 0.235, 0)), Vector((0, 0, 1))), (gv((0, 1.60, 0)), Vector((0, 0, 1)))]
     for side in ("L", "R"):
         sh, el, wr, hd = arm_joints(side)
         d = (wr - el).normalized()
@@ -366,15 +380,34 @@ def clean_seams(body):
     bm.free()
 
 
+def smooth_weights(body):
+    """Even out the skin weights around neck / shoulders / armpits so the girdle never pinches or doubles."""
+    bpy.context.view_layer.objects.active = body
+    bpy.ops.object.mode_set(mode="EDIT")
+    bm = bmesh.from_edit_mesh(body.data)
+    for v in bm.verts:
+        g = Vector((v.co.x, v.co.z, -v.co.y))
+        v.select = 1.3 < g.y < 1.66
+    bm.select_flush(True)
+    bmesh.update_edit_mesh(body.data)
+    bpy.ops.object.mode_set(mode="WEIGHT_PAINT")
+    body.data.use_paint_mask_vertex = True
+    for _ in range(3):
+        bpy.ops.object.vertex_group_smooth(group_select_mode="ALL", factor=0.6, repeat=4, expand=0.0)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.vertex_group_limit_total(group_select_mode="ALL", limit=4)
+    bpy.ops.object.vertex_group_normalize_all(group_select_mode="ALL", lock_active=False)
+
+
 def assign_materials(body, rig):
     M = {
         "top": mat("uniform_top", (0.2, 0.21, 0.22), 0.88),
         "pants": mat("uniform_pants", (0.17, 0.18, 0.19), 0.9),
         "gloves": mat("gloves", (0.1, 0.1, 0.1), 0.65),
         "boots": mat("boots", (0.08, 0.08, 0.08), 0.55),
-        "mask": mat("mask", (0.07, 0.07, 0.08), 0.92),
+        "skin": mat("skin", (0.77, 0.63, 0.52), 0.8),
     }
-    order = ["top", "pants", "gloves", "boots", "mask"]
+    order = ["top", "pants", "gloves", "boots", "skin"]
     for k in order:
         body.data.materials.append(M[k])
     vg = {g.index: g.name for g in body.vertex_groups}
@@ -392,8 +425,8 @@ def assign_materials(body, rig):
             k = "boots"
         elif _past_wrist(g):
             k = "gloves"
-        elif g.y > 1.535 and abs(g.x) < 0.14:
-            k = "mask"
+        elif g.y > 1.60 and abs(g.x) < 0.16:
+            k = "skin"
         elif g.y < 1.0 and not dom.startswith(("upper_arm", "forearm", "hand")):
             k = "pants"
         else:
@@ -413,18 +446,19 @@ def main():
     rig.select_set(True)
     bpy.context.view_layer.objects.active = rig
     bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+    smooth_weights(body)
     empty = [v.index for v in body.data.vertices if not v.groups]
     print("verts without weights:", len(empty))
     assign_materials(body, rig)
-    helmet, visor = build_helmet()
-    helmet.data.materials.append(mat("helmet", (0.22, 0.23, 0.24), 0.45))
-    visor.data.materials.append(mat("visor", (0.05, 0.05, 0.05), 0.25))
-    for o in (helmet, visor):
+    hair, eyes = build_hair_eyes()
+    hair.data.materials.append(mat("hair", (0.2, 0.12, 0.07), 0.9))
+    eyes.data.materials.append(mat("eyes", (0.04, 0.04, 0.045), 0.35))
+    for o in (hair, eyes):
         g = o.vertex_groups.new(name="head")
         g.add([v.index for v in o.data.vertices], 1.0, "REPLACE")
     bpy.ops.object.select_all(action="DESELECT")
-    helmet.select_set(True)
-    visor.select_set(True)
+    hair.select_set(True)
+    eyes.select_set(True)
     body.select_set(True)
     bpy.context.view_layer.objects.active = body
     bpy.ops.object.join()

@@ -5,9 +5,9 @@ extends RefCounted
 ## Each item has a Snappy default ("def", the shipping default) and a Classic value ("cls",
 ## the pre-v1b feel). Toggles are 0/1 sliders flagged "toggle".
 
-const VERSION := "v1i"
+const VERSION := "v1j"
 ## Saved tuning from these versions is kept on load (newer keys get defaults).
-const COMPAT := ["v1f", "v1g", "v1h", "v1i"]
+const COMPAT := ["v1f", "v1g", "v1h", "v1i", "v1j"]
 
 static var _groups: Array = []
 
@@ -66,7 +66,7 @@ static func groups() -> Array:
 		]},
 		{"name": "Camera", "items": [
 			_t("cam_northup", "North-up fixed camera", 1, 0),
-			_s("cam_dist", "Camera distance", 14.5, 13.6, 6.0, 30.0, 0.2),
+			_s("cam_dist", "Camera distance", 11.2, 13.6, 6.0, 30.0, 0.2),
 			_s("cam_pitch", "Camera pitch (deg)", 53.0, 60.0, 30.0, 85.0, 1.0),
 			_s("cam_fov", "Field of view", 52.0, 52.0, 35.0, 90.0, 1.0),
 			_s("cam_lag", "Follow lag (s, 0 = rigid)", 0.0, 0.12, 0.0, 0.5, 0.01),

@@ -12,7 +12,7 @@ const SHOULDER_L := Vector3(0.25, 0.46, 0.02)
 const SHOULDER_R := Vector3(-0.25, 0.46, -0.02)
 const GUN_AIM_POS := Vector3(-0.13, 0.43, 0.34)
 ## v1i model: rifle butt in the right shoulder pocket, elbows bent (real-scale rifle).
-const MODEL_GUN_AIM_POS := Vector3(-0.1, 0.4, 0.38)
+const MODEL_GUN_AIM_POS := Vector3(-0.15, 0.425, 0.41)
 const GUN_READY_POS := Vector3(-0.08, 0.29, 0.31)
 const GUN_READY_ROT := Vector3(0.5, 0.42, 0.18)
 const AIM_TWIST := -0.3
@@ -40,6 +40,8 @@ static var use_model := true
 static var _soldier_scene: PackedScene
 static var _rifle_scene: PackedScene
 const PALM_OFF := 0.06
+## v1j: plain head (no helmet); hair is its own material so it reads from above.
+const HAIR_COL := Color(0.24, 0.14, 0.07)
 var model: Node3D
 var skel: Skeleton3D
 var model_mesh: MeshInstance3D
@@ -445,7 +447,7 @@ func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, s
 	muzzle = _marker(gun, Vector3(0, 0.045, 0.64))
 	for n in body.find_children("*", "MeshInstance3D", true, false):
 		_classic_meshes.append(n)
-	_build_model(top, bottom, vest, helmet, gear, face, visor)
+	_build_model(top, bottom, vest, helmet, gear, skin, visor)
 	pose(1.0, 0.0, 0.0, 0.0, 0.0, false, -1.0, false, false, -1.0)
 
 
@@ -766,7 +768,7 @@ func pose(dt: float, spd: float, bob: float, slide_mix: float, slide_side: float
 		_drive_model()
 
 
-func _build_model(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, face: Color, visor: Color) -> void:
+func _build_model(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, skin: Color, visor: Color) -> void:
 	if _soldier_scene == null:
 		_soldier_scene = load("res://art/models/soldier.glb")
 		_rifle_scene = load("res://art/models/rifle.glb")
@@ -790,7 +792,7 @@ func _build_model(top: Color, bottom: Color, vest: Color, helmet: Color, gear: C
 	# Team materials (per soldier so the hit flash stays per soldier; meshes are shared).
 	var cols := {
 		"uniform_top": [top, 0.9], "uniform_pants": [bottom, 0.92], "gloves": [Color(0.13, 0.12, 0.11), 0.6],
-		"boots": [Color(0.1, 0.09, 0.085), 0.5], "mask": [face, 0.95], "helmet": [helmet.lightened(0.06), 0.42],
+		"boots": [Color(0.1, 0.09, 0.085), 0.5], "skin": [skin.darkened(0.3), 0.8], "hair": [HAIR_COL, 0.9], "eyes": [Color(0.04, 0.04, 0.045), 0.35],
 	}
 	var m_top := _mat(top, 0.9)
 	m_top.albedo_color = top.lightened(0.04)
@@ -811,9 +813,16 @@ func _build_model(top: Color, bottom: Color, vest: Color, helmet: Color, gear: C
 			mt = _mat(cols[key][0], cols[key][1])
 		else:
 			mt = _mat(gear, 0.8)
+		mt.disable_receive_shadows = true   # v1j: no self-shadow streaks on the figure (it still casts a ground shadow)
 		model_mesh.set_surface_override_material(i, mt)
 	rifle = _rifle_scene.instantiate()
 	gun.add_child(rifle)
+	for rmi in rifle.find_children("*", "MeshInstance3D", true, false):
+		var rmesh: Mesh = (rmi as MeshInstance3D).mesh
+		for si in rmesh.get_surface_count():
+			var rmat := rmesh.surface_get_material(si)
+			if rmat is BaseMaterial3D:
+				(rmat as BaseMaterial3D).disable_receive_shadows = true
 	var rm: Node3D = rifle.find_children("Rifle", "MeshInstance3D", true, false)[0]
 	for mk in [["grip", grip_r], ["support", grip_l], ["muzzle", muzzle]]:
 		var node: Node3D = rm.get_node(mk[0])
@@ -968,8 +977,8 @@ func _arm(i: int, sd: String, g: Dictionary, sp: Transform3D, gt: Transform3D) -
 
 ## Two-bone IK in spine space. Places the segment nodes between joints.
 func _ik(i: int, s: Vector3, target: Vector3, pole: Vector3, hand_basis: Basis) -> void:
-	var lu := LEN_UPPER
-	var ll := LEN_FORE
+	var lu := 0.35 if _model_on else LEN_UPPER   # v1j: model arms are a touch longer (thicker build)
+	var ll := 0.33 if _model_on else LEN_FORE
 	var d := target - s
 	var dist := clampf(d.length(), 0.06, lu + ll - 0.002)
 	var dir := d.normalized() if d.length() > 0.0001 else Vector3.FORWARD

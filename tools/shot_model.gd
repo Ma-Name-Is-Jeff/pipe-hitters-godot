@@ -67,9 +67,20 @@ func _initialize() -> void:
 		var cp := Vector3(1.6, 1.55, 3.2)
 		if args.size() > 2 and args[2] == "side":
 			cp = Vector3(4.0, 1.3, 0.3)
+		elif args.size() > 2 and args[2] == "head":
+			cp = Vector3(0.7, 1.82, 1.1)
+			cam.fov = 22
+		elif args.size() > 2 and args[2] == "headside":
+			cp = Vector3(1.4, 1.75, 0.0)
+			cam.fov = 22
+		elif args.size() > 2 and args[2] == "shoulder":
+			cp = Vector3(-1.2, 1.9, 1.3)
+			cam.fov = 28
+		elif args.size() > 2 and args[2] == "back":
+			cp = Vector3(-1.5, 1.6, -3.0)
 		elif args.size() > 2 and args[2] == "top":
 			cp = Vector3(0.01, 4.5, 0.6)
-		cam.look_at_from_position(cp, Vector3(0.0, 1.0, 0.0))
+		cam.look_at_from_position(cp, Vector3(0.0, 1.75 if args.size() > 2 and (args[2].begins_with("head") or args[2] == "shoulder") else 1.0, 0.0))
 	for f in 40:
 		for e in sol:
 			var s: Soldier = e[0]
