@@ -413,6 +413,7 @@ func _update_mates(dt: float) -> void:
 			var hit := randf() < 0.4
 			if not hit:
 				aim += Vector3(randf_range(-0.8, 0.8), randf_range(-0.3, 0.5), randf_range(-0.8, 0.8))
+			m.node.kick(1.0)
 			_spawn_tracer(m.node.muzzle.global_position, aim)
 			_spawn_spark(aim)
 			var pd := Vector2(m.node.position.x - pos.x, m.node.position.z - pos.z).length()
@@ -645,7 +646,7 @@ func _enemy_hp() -> int:
 func _load_settings() -> void:
 	var cf := ConfigFile.new()
 	if cf.load(SETTINGS_PATH) == OK:
-		var fresh: bool = cf.get_value("s", "tune_ver", "") == TuneDefs.VERSION
+		var fresh: bool = TuneDefs.COMPAT.has(cf.get_value("s", "tune_ver", ""))
 		var tune_keys := TuneDefs.defaults()
 		for k in settings.keys():
 			if not fresh and tune_keys.has(k):
@@ -2193,6 +2194,7 @@ func _fire() -> void:
 	var heavy := pellets > 1
 	kick_p += (0.014 if heavy else 0.006) * _t("recoil")
 	twitch = 1.0
+	soldier.kick(1.6 if heavy else 1.0)
 	muzzle_t = 0.04
 	muzzle_flash.rotation.y = randf() * TAU
 	muzzle_flash.scale = Vector3.ONE * _t("flash_size")
@@ -2339,6 +2341,7 @@ func _cover_point(b: Bot) -> Variant:
 
 
 func _enemy_fire(b: Bot) -> void:
+	b.node.kick(1.0)
 	var err := (1.0 - _t("enemy_acc") / 100.0) * 0.2
 	var y := b.node.rotation.y + randf_range(-err, err)
 	var origin := Vector3(b.node.position.x, 0.72 if b.crouch else 1.15, b.node.position.z)
@@ -2606,6 +2609,7 @@ func _process(delta: float) -> void:
 			hp = minf(max_hp, hp + 12.0 * dt)
 	elif playing and not paused:
 		_update_bots(dt)
+	Soldier.set_anim(settings)
 	_pose_bots(dt)
 	if not arena_mode:
 		_pose_mates(dt)

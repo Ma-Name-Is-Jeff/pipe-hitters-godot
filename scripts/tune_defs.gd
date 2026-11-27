@@ -5,7 +5,9 @@ extends RefCounted
 ## Each item has a Snappy default ("def", the shipping default) and a Classic value ("cls",
 ## the pre-v1b feel). Toggles are 0/1 sliders flagged "toggle".
 
-const VERSION := "v1f"
+const VERSION := "v1g"
+## Saved tuning from these versions is kept on load (newer keys get defaults).
+const COMPAT := ["v1f", "v1g"]
 
 static var _groups: Array = []
 
@@ -83,6 +85,15 @@ static func groups() -> Array:
 			_t("hud_bottom", "Bottom-center HUD", 1, 0),
 			_s("btn_scale", "Button size (%)", 100.0, 100.0, 50.0, 150.0, 5.0),
 			_s("btn_opacity", "Button opacity (%)", 50.0, 50.0, 20.0, 100.0, 1.0),
+		]},
+		{"name": "Anim", "items": [
+			_s("anim_bob", "Body bob (% of height)", 6.0, 2.0, 0.0, 12.0, 0.5),
+			_s("anim_lean", "Lean into motion (deg)", 12.0, 0.0, 0.0, 25.0, 0.5),
+			_s("anim_twist", "Hip/aim twist clamp (deg)", 90.0, 90.0, 20.0, 120.0, 5.0),
+			_s("anim_cadence", "Run cadence (steps/s)", 4.5, 4.5, 2.5, 7.0, 0.1),
+			_s("anim_knee", "Knee lift", 1.5, 1.0, 0.0, 3.0, 0.05),
+			_s("anim_sway", "Weapon sway", 1.0, 0.0, 0.0, 3.0, 0.05),
+			_s("anim_kick", "Weapon kick", 1.0, 0.0, 0.0, 3.0, 0.05),
 		]},
 		{"name": "Enemy", "items": [
 			_s("enemy_hp", "Enemy health (hits)", 8.0, 4.0, 1.0, 20.0, 1.0),

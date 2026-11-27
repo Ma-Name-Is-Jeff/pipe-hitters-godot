@@ -13,7 +13,7 @@ Every priority below is a must-have. Only the order is fixed.
 | 3 | **Stealth with alerts, and bosses** | todo |
 | 4 | **Home base** | todo |
 | 5 | **The gym.** Train stats with a punching bag, sparring, weights and running | todo |
-| 6 | **Skin sets.** Face or helmet, top, bottom | todo |
+| 6 | **Skin sets.** Face or helmet, top, bottom. Fun onesie skins (banana, monkey, dino, etc.) as rare unlocks | todo |
 
 None of items 2–6 are started. This is a docs-only note.
 
@@ -29,6 +29,7 @@ None of items 2–6 are started. This is a docs-only note.
 | v1d | 8-hit default (~1s TTK), subtler muzzle flash, 2x touch controls, lock settle + movement accuracy (Aim tab) | live |
 | v1e | Touch controls: FIRE stays ~2x v1c, other buttons and the stick 1.6x, semi-transparent, tighter right cluster | live |
 | v1f | Pause/TUNE sliders for button size (50–150%, default 100%) and opacity (20–100%, default 50%), persisted, live preview | live |
+| v1g | Fluid soldier rig: thicker action-figure build, turret spine twist (pelvis follows velocity, chest/rifle follow aim, clamp ~90°), forward/backpedal/strafe gait blend driven by distance (no foot skate), bob, weight shift, lean spring, idle breathing, rifle bob lag + fire kick. Anim tuning tab | live |
 | later | Bake Bran's tuned values in as the defaults (once he sends them from the Copy values button) | todo |
 | later | Hard mode: enemies take ~1s or 10 hits to down (whichever is longer) | todo |
 
