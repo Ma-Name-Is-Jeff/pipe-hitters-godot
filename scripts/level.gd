@@ -529,6 +529,11 @@ func puddle(x: float, z: float, w: float, d: float) -> void:
 
 
 func _build_mood() -> void:
+	_mood_mats()
+	_mood_objects()
+
+
+func _mood_mats() -> void:
 	_beam_mat = _additive(_grad(false, Color(0.75, 0.86, 1.0, 0.085), Color(0.6, 0.75, 1.0, 0.0)), Color.WHITE)
 	_pool_cold = _additive(_grad(true, Color(0.62, 0.74, 0.95, 0.42), Color(0.5, 0.6, 0.9, 0.0)), Color.WHITE)
 	_pool_warm = _additive(_grad(true, Color(1.0, 0.62, 0.3, 0.38), Color(1.0, 0.5, 0.2, 0.0)), Color.WHITE)
@@ -542,6 +547,9 @@ func _build_mood() -> void:
 	_fence_mat.uv1_scale = Vector3(8, 2, 1)
 	_fence_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 
+
+
+func _mood_objects() -> void:
 	for f in [[7.5, 80, 1.5, 74], [-7.5, 57, -1.5, 52], [7.5, 36, 1.5, 32], [-7.5, 14, -1.5, 10],
 			[7.5, -6, 1.5, -10], [-7.5, -27, -1.5, -32], [7.5, -46, 1.5, -50], [-7.5, -66, -1.5, -72], [7.5, -84, 1.5, -86]]:
 		flood(f[0], f[1], f[2], f[3])
@@ -559,3 +567,78 @@ func _build_mood() -> void:
 
 	for pd in [[2, 66, 3.2, 1.6], [-3, 41, 2.4, 1.4], [3, 2, 3.6, 1.8], [-2, -36, 2.8, 1.3], [1, -58, 3.0, 2.0], [-2, -80, 2.6, 1.4], [14, 20, 2.2, 1.2], [-26, -26, 3.0, 1.5]]:
 		puddle(pd[0], pd[1], pd[2], pd[3])
+
+
+# ---------- tuning arena (about 40 x 40) ----------
+
+const ARENA_HALF := 20.0
+const ARENA_START := Vector3(0, 0, 15)
+const ARENA_SPAWNS := [Vector2(0, -10), Vector2(-9, -11), Vector2(9, -9)]
+
+
+func build_arena() -> void:
+	var gsz := ARENA_HALF * 2.0 + 20.0
+	var gm := StandardMaterial3D.new()
+	gm.albedo_texture = grass_texture()
+	gm.albedo_color = Color8(120, 138, 128)
+	gm.roughness = 0.55
+	gm.metallic_specular = 0.7
+	gm.uv1_scale = Vector3(gsz / 4.5, gsz / 4.5, 1)
+	gm.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	_ground_plane(0, 0, gsz, gsz, 0, gm, 0)
+	var dm := StandardMaterial3D.new()
+	dm.albedo_texture = dirt_texture()
+	dm.albedo_color = Color8(92, 88, 84)
+	dm.roughness = 0.2
+	dm.metallic_specular = 0.9
+	dm.uv1_scale = Vector3(3, 10, 1)
+	_ground_plane(0, 0, 6, 40, 0, dm, 0.012)
+	var peri: Color = COL["peri"]
+	var e := ARENA_HALF + 0.5
+	wall_x(-e, 0, 42, null, 3.0, peri, 1.0)
+	wall_x(e, 0, 42, null, 3.0, peri, 1.0)
+	wall_z(-e, 0, 42, null, 3.0, peri, 1.0)
+	wall_z(e, 0, 42, null, 3.0, peri, 1.0)
+	# Low cover.
+	low(-7, 6, 4.0, 0.42, 0.85)
+	low(6, 7, 0.42, 4.0, 0.88)
+	low(-3, -4, 4.4, 0.42, 0.8)
+	low(12, -10, 3.6, 0.42, 0.82)
+	low(-12, -12, 0.42, 3.6, 0.85)
+	cluster(-14, 2)
+	cluster(9, -4)
+	# Hurdles to vault.
+	hurdle(0, 8, false)
+	hurdle(-14, -6, true)
+	# Slide wall at the end of a clear lane along z = 0 (x from -8 to 13).
+	wall_z(14.5, 0, 9, null, 3.0, COL["wall"], 0.6)
+	var mark: Color = COL["mark"]
+	add_solid(2.5, 0.03, 0, 21.0, 0.02, 0.18, mark, false, true)
+	add_solid(-8.0, 0.03, 0, 0.18, 0.02, 1.4, mark, false, true)
+	add_solid(13.9, 0.03, 0, 0.18, 0.02, 1.4, mark, false, true)
+	add_solid(0, 0.03, ARENA_START.z - 1.2, 0.35, 0.02, 1.4, mark, false, true)
+	_mood_mats()
+	for c in [[-17.0, 17.0, -8.0, 8.0], [17.0, 17.0, 8.0, 8.0], [-17.0, -17.0, -8.0, -8.0], [17.0, -17.0, 8.0, -8.0]]:
+		flood(c[0], c[1], c[2], c[3])
+	practical(-19.2, 0.0)
+	practical(14.0, 4.9)
+	for pd in [[-2.0, 11.0, 3.0, 1.5], [3.0, -1.0, 2.6, 1.3], [-6.0, -8.0, 3.2, 1.6]]:
+		puddle(pd[0], pd[1], pd[2], pd[3])
+	var lbl := Label3D.new()
+	lbl.text = "SLIDE LANE  >>>"
+	lbl.font_size = 64
+	lbl.pixel_size = 0.01
+	lbl.modulate = Color(1, 0.88, 0.45)
+	lbl.outline_size = 12
+	lbl.rotation = Vector3(-PI * 0.5, 0, 0)
+	lbl.position = Vector3(2.5, 0.05, 1.3)
+	root.add_child(lbl)
+	var mesh := _st.commit()
+	var lm := StandardMaterial3D.new()
+	lm.vertex_color_use_as_albedo = true
+	lm.roughness = 0.92
+	lm.albedo_color = Color(0.86, 0.86, 0.86)
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = lm
+	root.add_child(mi)

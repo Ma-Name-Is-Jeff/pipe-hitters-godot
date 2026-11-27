@@ -67,8 +67,8 @@ func _process(_dt: float) -> bool:
 		main.vel = Vector3.ZERO
 		main.view_yaw = 0.0
 		main.stance = "slide"
-		main.slide_t = main.SLIDE_DUR
-		main.vel = Vector3(0, 0, -main.SLIDE_BOOST)
+		main.slide_t = main._slide_dur()
+		main.vel = Vector3(0, 0, -main._slide_boost())
 	if frames == 60:
 		ok("slide stopped at low wall or vaulted", main.stance != "slide", main.stance + " z=%.2f" % main.pos.z)
 	if frames == 70:

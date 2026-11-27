@@ -1,25 +1,18 @@
 extends Node3D
 ## Pipe Hitters: twin-stick compound run. Everything is built in code.
 
-const WALK := 5.6
-const SPRINT := 8.6
-const SLIDE_BOOST := 11.2
-const SLIDE_DUR := 1.74
-const ACCEL := 32.0
-const FRICTION := 12.0
 const RADIUS := 0.36
 const VAULT_MAX := 1.15
 const VAULT_MIN := 0.32
-const CAM_TILT := 1.0471976
-const CAM_DIST := 16.5
 const AIM_DEAD := 0.16
-const FIRE_STICK := 0.4
 const AIM_RANGE := 22.0
 const START := Vector3(0, 0, 87.5)
 const START_YAW := PI
+const ARENA_START := Vector3(0, 0, 15)
+const RESPAWN_S := 2.5
+const VERSION := TuneDefs.VERSION
 const EXTRACT := Vector3(0, 0, -88)
 const EXTRACT_R := 4.6
-const AIM_CONE := 0.2443461
 const AIM_SPEED := 0.5
 const VIEW_PITCH_MIN := -0.3141593
 const VIEW_PITCH_MAX := 0.2094395
@@ -80,6 +73,14 @@ class Pickup:
 var settings := {"invert_move": false, "landscape": false, "fullscreen": false, "aim_sens": 70.0, "assist": 70.0, "volume": 70.0, "facing": "follow", "zoom": 0.0}
 
 var level: Level
+var arena_level: Level
+var compound_root: Node3D
+var arena_root: Node3D
+var arena_mode := false
+var compound_bots: Array[Bot] = []
+var arena_bots: Array[Bot] = []
+var tune_open := false
+var _save_wait := -1.0
 var obstacles: Array[Obstacle] = []
 var bots: Array[Bot] = []
 var pickups: Array[Pickup] = []
@@ -170,16 +171,26 @@ var aim_mark: MeshInstance3D
 
 
 func _ready() -> void:
+	settings.merge(TuneDefs.defaults(), false)
 	_load_settings()
 	zoom_show = settings["zoom"]
 	_build_env()
-	level = Level.new(self)
+	compound_root = Node3D.new()
+	add_child(compound_root)
+	level = Level.new(compound_root)
 	level.build(START, EXTRACT)
+	arena_root = Node3D.new()
+	arena_root.visible = false
+	add_child(arena_root)
+	arena_level = Level.new(arena_root)
+	arena_level.build_arena()
 	obstacles = level.obstacles
 	soldier = Soldier.new()
 	soldier.setup(Color8(46, 48, 52), Color8(40, 42, 46), Color8(34, 36, 38), Color8(44, 46, 48), Color8(30, 32, 34), Color8(196, 160, 132), Color8(30, 31, 33), Color8(20, 20, 22), Color8(70, 230, 210), Color(0.02, 0.05, 0.07))
 	add_child(soldier)
-	_build_bots()
+	_build_bots(COMPOUND_SPECS, compound_bots)
+	_build_bots(ARENA_SPECS, arena_bots)
+	bots = compound_bots
 	_build_mates()
 	_build_pickups()
 	_build_fx()
@@ -188,6 +199,14 @@ func _ready() -> void:
 	ui = GameUI.new()
 	add_child(ui)
 	ui.deploy.connect(_start_play)
+	ui.deploy_arena.connect(_start_arena)
+	ui.open_tune.connect(func() -> void: _open_tune(true))
+	ui.tune_close.connect(func() -> void: _open_tune(false))
+	ui.switch_mode.connect(_switch_mode)
+	ui.tune_copy.connect(_tune_copy)
+	ui.tune_paste.connect(_tune_paste)
+	ui.tune_reset.connect(_tune_reset)
+	ui.tune_enemy_toggle.connect(_tune_enemy_toggle)
 	ui.resume.connect(func() -> void: _set_paused(false))
 	ui.retry.connect(_retry)
 	ui.restart.connect(_retry)
@@ -196,6 +215,7 @@ func _ready() -> void:
 	ui.hud.visible = false
 	ui.sync(settings)
 	_apply_volume()
+	_set_mode(false)
 	_reset_mission()
 	cam_pos = _camera_target(0.0)
 	if OS.has_feature("web_android") or OS.has_feature("web_ios") or DisplayServer.is_touchscreen_available():
@@ -255,13 +275,16 @@ func _build_env() -> void:
 	camera.make_current()
 
 
-func _build_bots() -> void:
-	var specs := [
-		[-5, 79, 0.2, [-3, 77, -8, 82]], [6, 75, -0.3, [8, 73, 3, 78]],
-		[0, 20, 0.2, [3, 18, -3, 23]], [8, 9, -0.4, [10, 7, 5, 12]], [-11, 4, 2.2, [-9, 2, -14, 7]],
-		[-18, -29, 1.0, [-16, -26, -22, -32]], [-35, -44, 0.4, [-32, -41, -38, -48]],
-		[-6, -84, 0.1, [-4, -81, -9, -87]], [7, -86, -0.2, [9, -83, 4, -88]],
-	]
+const COMPOUND_SPECS := [
+	[-5, 79, 0.2, [-3, 77, -8, 82]], [6, 75, -0.3, [8, 73, 3, 78]],
+	[0, 20, 0.2, [3, 18, -3, 23]], [8, 9, -0.4, [10, 7, 5, 12]], [-11, 4, 2.2, [-9, 2, -14, 7]],
+	[-18, -29, 1.0, [-16, -26, -22, -32]], [-35, -44, 0.4, [-32, -41, -38, -48]],
+	[-6, -84, 0.1, [-4, -81, -9, -87]], [7, -86, -0.2, [9, -83, 4, -88]],
+]
+const ARENA_SPECS := [[0, -10, 0.0, [3, -9, -3, -12]]]
+
+
+func _build_bots(specs: Array, out: Array) -> void:
 	var bar_bg_mat := _flat_mat(Color(0.16, 0.13, 0.11))
 	bar_bg_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	bar_bg_mat.billboard_keep_scale = true
@@ -294,7 +317,7 @@ func _build_bots() -> void:
 		b.bar_fill.position = Vector3(0, 2.15, 0.01)
 		b.bar_fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		b.node.add_child(b.bar_fill)
-		bots.append(b)
+		out.append(b)
 
 
 func _build_mates() -> void:
@@ -334,7 +357,7 @@ func _update_mates(dt: float) -> void:
 		if dist > 24.0 and not _blocked_at(want.x, want.y, 0.4):
 			m.node.position = Vector3(want.x, 0, want.y)
 		elif dist > 0.35:
-			var sp := clampf(dist * 2.4, 0.0, SPRINT * 1.05)
+			var sp := clampf(dist * 2.4, 0.0, _sprint() * 1.05)
 			var st := d / dist * minf(sp * dt, dist)
 			var c := _collide_xz(cur.x + st.x, cur.y + st.y, 0.34)
 			m.node.position.x = c.x
@@ -495,6 +518,36 @@ func _build_fx() -> void:
 	add_child(aim_mark)
 
 
+# ---------- tuning accessors ----------
+
+func _t(k: String) -> float:
+	return float(settings[k])
+
+
+func _walk() -> float: return _t("move_speed")
+func _sprint() -> float: return _t("sprint_speed")
+func _slide_boost() -> float: return _t("slide_speed")
+func _slide_dur() -> float: return _t("slide_dur")
+func _accel() -> float: return _t("accel")
+func _friction() -> float: return _t("decel")
+func _fire_stick() -> float: return _t("fire_thresh")
+func _aim_cone() -> float: return deg_to_rad(_t("assist_cone"))
+func _cam_dist() -> float: return _t("cam_dist")
+func _cam_tilt() -> float: return deg_to_rad(_t("cam_pitch"))
+
+
+func _fire_ms(w: Dictionary) -> float:
+	return _t("fire_ms") if w["short"] == "CARBINE" else float(w["fire_ms"])
+
+
+func _spread(w: Dictionary) -> float:
+	return _t("spread") if w["short"] == "CARBINE" else float(w["spread"])
+
+
+func _enemy_hp() -> int:
+	return int(round(_t("enemy_hp")))
+
+
 # ---------- settings ----------
 
 func _load_settings() -> void:
@@ -502,7 +555,9 @@ func _load_settings() -> void:
 	if cf.load(SETTINGS_PATH) == OK:
 		for k in settings.keys():
 			settings[k] = cf.get_value("s", k, settings[k])
-	settings["zoom"] = clampf(float(settings["zoom"]), 0.0, 100.0)
+	for it in TuneDefs.all_items():
+		settings[it["key"]] = TuneDefs.clamp_value(it["key"], float(settings[it["key"]]))
+	settings["enemy_active"] = bool(settings["enemy_active"])
 	settings["fullscreen"] = false
 	settings["landscape"] = false
 
@@ -530,7 +585,99 @@ func _on_setting(key: String, value: Variant) -> void:
 			settings["volume"] = float(value)
 			_apply_volume()
 		_:
-			settings[key] = float(value)
+			settings[key] = TuneDefs.clamp_value(key, float(value))
+			if key == "enemy_hp":
+				_apply_enemy_hp()
+	_queue_save()
+	ui.sync(settings)
+
+
+func _queue_save() -> void:
+	_save_wait = 0.6
+
+
+func _apply_enemy_hp() -> void:
+	for b in bots:
+		if b.state == "down":
+			continue
+		b.max_hp = _enemy_hp()
+		b.hp = b.max_hp
+		b.bar_fill.scale = Vector3.ONE
+		(b.bar_fill.material_override as StandardMaterial3D).albedo_color = Color(0.49, 0.73, 0.35)
+
+
+# ---------- tuning panel actions ----------
+
+func tuning_values() -> Dictionary:
+	var d := {"version": VERSION}
+	var defs := TuneDefs.defaults()
+	for k in defs.keys():
+		d[k] = settings[k]
+	return d
+
+
+func _tune_copy() -> void:
+	var json := JSON.stringify(tuning_values(), "  ")
+	DisplayServer.clipboard_set(json)
+	ui.tune_text.text = json
+	ui.tune_status.text = "Copied. JSON is also in the box below."
+
+
+## Applies a JSON string of tuning values. Returns how many keys were applied (-1 = invalid JSON).
+func apply_tuning_json(text: String) -> int:
+	var jp := JSON.new()
+	if jp.parse(text) != OK:
+		return -1
+	var parsed: Variant = jp.data
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return -1
+	var defs := TuneDefs.defaults()
+	var n := 0
+	for k in (parsed as Dictionary).keys():
+		if not defs.has(k):
+			continue
+		var v: Variant = parsed[k]
+		if k == "enemy_active":
+			settings[k] = bool(v)
+		elif typeof(v) == TYPE_FLOAT or typeof(v) == TYPE_INT:
+			settings[k] = TuneDefs.clamp_value(k, float(v))
+		else:
+			continue
+		n += 1
+	_apply_enemy_hp()
+	_apply_volume()
+	zoom_show = float(settings["zoom"])
+	_save_settings()
+	ui.sync(settings)
+	return n
+
+
+func _tune_paste() -> void:
+	var text := ui.tune_text.text.strip_edges()
+	if text == "":
+		text = DisplayServer.clipboard_get().strip_edges()
+		ui.tune_text.text = text
+	var n := apply_tuning_json(text)
+	ui.tune_status.text = "Pasted %d values." % n if n >= 0 else "Could not read that JSON. Tap Copy first, or paste into the box."
+
+
+func reset_tuning() -> void:
+	var defs := TuneDefs.defaults()
+	for k in defs.keys():
+		settings[k] = defs[k]
+	_apply_enemy_hp()
+	zoom_show = float(settings["zoom"])
+	_save_settings()
+	ui.sync(settings)
+
+
+func _tune_reset() -> void:
+	reset_tuning()
+	ui.tune_status.text = "Defaults restored."
+
+
+func _tune_enemy_toggle() -> void:
+	settings["enemy_active"] = not bool(settings["enemy_active"])
 	_save_settings()
 	ui.sync(settings)
 
@@ -590,11 +737,44 @@ func _game_active() -> bool:
 
 
 func _start_play() -> void:
+	_begin(false)
+
+
+func _start_arena() -> void:
+	_begin(true)
+
+
+func _begin(arena: bool) -> void:
+	_set_mode(arena)
 	_reset_mission()
 	playing = true
 	paused = false
+	tune_open = false
+	ui.tune_panel.visible = false
+	ui.pause_panel.visible = false
 	ui.start_panel.visible = false
 	ui.hud.visible = true
+
+
+func _switch_mode() -> void:
+	_begin(not arena_mode)
+
+
+func _set_mode(arena: bool) -> void:
+	arena_mode = arena
+	compound_root.visible = not arena
+	arena_root.visible = arena
+	obstacles = arena_level.obstacles if arena else level.obstacles
+	bots = arena_bots if arena else compound_bots
+	for b in compound_bots:
+		b.node.visible = not arena
+	for b in arena_bots:
+		b.node.visible = arena
+	for m in mates:
+		m.node.visible = not arena
+	for p in pickups:
+		p.node.visible = not arena and p.live
+	ui.set_arena(arena)
 
 
 func _retry() -> void:
@@ -611,7 +791,22 @@ func _set_paused(on: bool) -> void:
 	if not playing or mission_over:
 		return
 	paused = on
+	tune_open = false
+	ui.tune_panel.visible = false
 	ui.pause_panel.visible = on
+	mouse_down = false
+	_clear_touches()
+	if on:
+		ui.sync(settings)
+
+
+func _open_tune(on: bool) -> void:
+	if not playing or mission_over:
+		return
+	tune_open = on
+	paused = on
+	ui.tune_panel.visible = on
+	ui.pause_panel.visible = false
 	mouse_down = false
 	_clear_touches()
 	if on:
@@ -636,7 +831,7 @@ func _reset_mission() -> void:
 	_clear_touches()
 	view_yaw = 0.0
 	view_pitch = 0.0
-	pos = START
+	pos = ARENA_START if arena_mode else START
 	vel = Vector3.ZERO
 	yaw = START_YAW
 	prev_yaw = yaw
@@ -666,23 +861,7 @@ func _reset_mission() -> void:
 	mission_over = false
 	stats = {"kills": 0, "shots": 0, "hits": 0, "start": _now()}
 	for b in bots:
-		b.hp = b.max_hp
-		b.state = "patrol"
-		b.t = 0.0
-		b.flash = 0.0
-		b.crouch = false
-		b.alert = 0.0
-		b.wp = 0
-		b.shoot_cd = randf() * 0.8
-		b.node.position = Vector3(b.home.x, 0, b.home.y)
-		b.node.rotation = Vector3(0, b.facing, 0)
-		b.prev = b.home
-		b.spd = 0.0
-		b.node.set_flash(0.0)
-		b.bar_bg.visible = true
-		b.bar_fill.visible = true
-		b.bar_fill.scale = Vector3.ONE
-		b.node.k_down = 0.0
+		_respawn_bot(b, b.home)
 	for i in range(pickups.size() - 1, -1, -1):
 		var p: Pickup = pickups[i]
 		if p.drop:
@@ -691,10 +870,46 @@ func _reset_mission() -> void:
 		else:
 			p.live = true
 			p.wait = 0.0
-			p.node.visible = true
+			p.node.visible = not arena_mode
 	soldier.k_down = 0.0
-	_place_mates()
+	if not arena_mode:
+		_place_mates()
 	cam_pos = _camera_target(0.0)
+
+
+func _respawn_bot(b: Bot, at: Vector2) -> void:
+	b.max_hp = _enemy_hp()
+	b.hp = b.max_hp
+	b.state = "patrol"
+	b.t = 0.0
+	b.flash = 0.0
+	b.crouch = false
+	b.alert = 0.0
+	b.wp = 0
+	b.shoot_cd = 0.6 + randf() * 0.8
+	b.node.position = Vector3(at.x, 0, at.y)
+	b.node.rotation = Vector3(0, b.facing, 0)
+	b.prev = at
+	b.spd = 0.0
+	b.node.set_flash(0.0)
+	b.bar_bg.visible = true
+	b.bar_fill.visible = true
+	b.bar_fill.scale = Vector3.ONE
+	(b.bar_fill.material_override as StandardMaterial3D).albedo_color = Color(0.49, 0.73, 0.35)
+	b.node.k_down = 0.0
+
+
+func _arena_respawn(b: Bot) -> void:
+	var best := Level.ARENA_SPAWNS[0] as Vector2
+	var tries := 0
+	while tries < 6:
+		var c := Level.ARENA_SPAWNS[randi() % Level.ARENA_SPAWNS.size()] as Vector2
+		best = c
+		if Vector2(pos.x - c.x, pos.z - c.y).length() > 8.0:
+			break
+		tries += 1
+	b.home = best
+	_respawn_bot(b, best)
 
 
 func _complete() -> void:
@@ -759,9 +974,22 @@ func _input(event: InputEvent) -> void:
 
 func _on_key(e: InputEventKey) -> void:
 	var k := e.physical_keycode
+	if not playing and ui.start_panel.visible:
+		if k == KEY_1 or k == KEY_ENTER or k == KEY_KP_ENTER:
+			_start_arena()
+		elif k == KEY_2:
+			_start_play()
+		return
 	if k == KEY_ESCAPE or k == KEY_P:
-		if playing and not mission_over:
+		if tune_open:
+			_open_tune(false)
+		elif playing and not mission_over:
 			_set_paused(not paused)
+		return
+	if tune_open and ui.tune_text.has_focus():
+		return
+	if k == KEY_T and playing:
+		_open_tune(not tune_open)
 		return
 	if not _game_active():
 		return
@@ -814,6 +1042,8 @@ func _on_mouse_button(e: InputEventMouseButton) -> void:
 func _touch_button(b: String) -> void:
 	ui.flash_button(b)
 	match b:
+		"tune":
+			_open_tune(true)
 		"vault":
 			_try_vault({})
 		"slide":
@@ -1170,7 +1400,7 @@ func _stick_world_yaw() -> float:
 
 func _stick_curve(m: float) -> float:
 	var t := clampf((m - AIM_DEAD) / (1.0 - AIM_DEAD), 0.0, 1.0)
-	return t * t
+	return pow(t, _t("aim_curve"))
 
 
 func _mouse_ground_yaw() -> float:
@@ -1208,7 +1438,7 @@ func _assist_valid(b: Bot, break_cone: float) -> bool:
 	if _los_blocked(pos.x, pos.z, b.node.position.x, b.node.position.z):
 		return false
 	if touch_mode and aim_mag > 0.72:
-		if absf(_wrap(_stick_world_yaw() - atan2(off[2], off[3]))) > AIM_CONE * 1.6:
+		if absf(_wrap(_stick_world_yaw() - atan2(off[2], off[3]))) > _aim_cone() * 1.6:
 			return false
 	return true
 
@@ -1221,8 +1451,8 @@ func _find_assist() -> Bot:
 	if touch_mode and aim_mag <= AIM_DEAD:
 		sticky_assist = null
 		return null
-	var cone := AIM_CONE * (0.75 + 0.35 * strength)
-	if _assist_valid(sticky_assist, cone * 1.85):
+	var cone := _aim_cone() * (0.75 + 0.35 * strength)
+	if _assist_valid(sticky_assist, cone * _t("assist_stick")):
 		return sticky_assist
 	var best: Bot = null
 	var best_score := 1e9
@@ -1306,7 +1536,7 @@ func _accelerate(wx: float, wz: float, speed: float, dt: float) -> void:
 	var add := speed - cur
 	if add <= 0.0:
 		return
-	var acc := minf(add, ACCEL * dt * (speed / WALK))
+	var acc := minf(add, _accel() * dt * (speed / _walk()))
 	vel.x += wx * acc
 	vel.z += wz * acc
 
@@ -1376,17 +1606,17 @@ func _try_slide() -> void:
 	if stance != "stand":
 		return
 	var d := _slide_dir()
-	vel.x = d.x * SLIDE_BOOST
-	vel.z = d.z * SLIDE_BOOST
+	vel.x = d.x * _slide_boost()
+	vel.z = d.z * _slide_boost()
 	slide_side = d.y
 	stance = "slide"
-	slide_t = SLIDE_DUR
+	slide_t = _slide_dur()
 	synth.play("thud", 0.35)
 
 
 func _slide_speed(t_left: float) -> float:
-	var u := 1.0 - clampf(t_left / SLIDE_DUR, 0.0, 1.0)
-	return SLIDE_BOOST * (1.0 - 0.38 * u * u)
+	var u := 1.0 - clampf(t_left / _slide_dur(), 0.0, 1.0)
+	return _slide_boost() * (1.0 - 0.38 * u * u)
 
 
 func _end_slide_impact() -> void:
@@ -1420,7 +1650,7 @@ func _update_move(dt: float) -> void:
 	var w := _wish()
 	var aiming := _is_aiming() or recently_shot > 0.0
 	var sprint := not aiming and _sprinting(w)
-	var speed := SLIDE_BOOST if stance == "slide" else (SPRINT if sprint else WALK)
+	var speed := _slide_boost() if stance == "slide" else (_sprint() if sprint else _walk())
 	if aiming and stance != "slide":
 		speed *= AIM_SPEED
 	if crouch and stance == "stand":
@@ -1467,10 +1697,10 @@ func _update_move(dt: float) -> void:
 		if stance == "slide" and slide_t <= 0.0:
 			stance = "stand"
 	elif w.y > 0.04:
-		_apply_friction(dt, FRICTION * 0.45)
+		_apply_friction(dt, _friction() * 0.45)
 		_accelerate(w.x, w.z, speed * w.y, dt)
 	else:
-		_apply_friction(dt, FRICTION * 1.35)
+		_apply_friction(dt, _friction() * 1.35)
 
 	if not slid:
 		pos.x += vel.x * dt
@@ -1507,7 +1737,7 @@ func _cur_wep() -> Dictionary:
 
 
 func _swap_weapon(i: int) -> void:
-	if not _game_active() or i == wep or i < 0 or i >= WEAPONS.size():
+	if arena_mode or not _game_active() or i == wep or i < 0 or i >= WEAPONS.size():
 		return
 	guns[wep] = {"mag": mag, "reserve": reserve, "reload_t": reload_t}
 	wep = i
@@ -1587,7 +1817,8 @@ func _hurt_bot(b: Bot) -> void:
 		stats["kills"] += 1
 		b.bar_bg.visible = false
 		b.bar_fill.visible = false
-		_spawn_pickup(b.node.position.x, b.node.position.z, 24, 4, 0.0, true)
+		if not arena_mode:
+			_spawn_pickup(b.node.position.x, b.node.position.z, 24, 4, 0.0, true)
 	else:
 		var u := float(b.hp) / b.max_hp
 		b.bar_fill.scale = Vector3(maxf(0.05, u), 1, 1)
@@ -1617,7 +1848,7 @@ func _fire() -> void:
 	if burst_wait > 0.0:
 		return
 	var now := Time.get_ticks_msec()
-	if now - last_shot < float(w["fire_ms"]):
+	if now - last_shot < _fire_ms(w):
 		return
 	var first := now - last_shot > 350 or burst_count == 0
 	last_shot = now
@@ -1629,14 +1860,14 @@ func _fire() -> void:
 		burst_count = 0
 	var pellets: int = w["pellets"]
 	var heavy := pellets > 1
-	kick_p += 0.014 if heavy else 0.006
+	kick_p += (0.014 if heavy else 0.006) * _t("recoil")
 	muzzle_t = 0.045
 	synth.play("sweeper" if heavy else "carbine", 0.9)
 	var origin := Vector3(pos.x, 0.72 if crouch else 1.15, pos.z)
 	var base_dir := Vector3(sin(yaw), -0.02, cos(yaw)).normalized()
 	var muz := soldier.muzzle.global_position
 	var still := aim_bloom < 0.22 and Vector2(vel.x, vel.z).length() < 0.8
-	var spr := float(w["spread"]) * (0.28 + aim_bloom * 1.35)
+	var spr := _spread(w) * (0.28 + aim_bloom * _t("bloom"))
 	if still:
 		spr *= 0.32
 	if first and not heavy:
@@ -1672,7 +1903,7 @@ func _update_shoot(dt: float) -> void:
 		recently_shot -= dt
 	if burst_wait > 0.0:
 		burst_wait -= dt
-	var manual := aim_mag >= FIRE_STICK if touch_mode else mouse_down
+	var manual := aim_mag >= _fire_stick() if touch_mode else mouse_down
 	var auto := _is_aiming() and assist_target != null
 	if manual or auto:
 		_fire()
@@ -1687,12 +1918,16 @@ func _update_shoot(dt: float) -> void:
 			var take := mini(need, reserve)
 			mag += take
 			reserve -= take
+			if arena_mode:
+				reserve = int(WEAPONS[0]["reserve"])
 			reload_t = 0.0
 
 
 # ---------- pickups ----------
 
 func _update_pickups(dt: float) -> void:
+	if arena_mode:
+		return
 	for i in range(pickups.size() - 1, -1, -1):
 		var p: Pickup = pickups[i]
 		if not p.live:
@@ -1771,7 +2006,8 @@ func _cover_point(b: Bot) -> Variant:
 
 
 func _enemy_fire(b: Bot) -> void:
-	var y := b.node.rotation.y + randf_range(-0.1, 0.1)
+	var err := (1.0 - _t("enemy_acc") / 100.0) * 0.2
+	var y := b.node.rotation.y + randf_range(-err, err)
 	var origin := Vector3(b.node.position.x, 0.72 if b.crouch else 1.15, b.node.position.z)
 	var d := Vector3(sin(y), -0.02, cos(y)).normalized()
 	var wd := _world_hit(origin, d, 28.0)
@@ -1798,6 +2034,14 @@ func _update_bots(dt: float) -> void:
 		if b.state == "down":
 			b.t += dt
 			b.crouch = false
+			if arena_mode and b.t > RESPAWN_S:
+				_arena_respawn(b)
+			continue
+		if arena_mode and not settings["enemy_active"]:
+			b.state = "idle"
+			b.alert = 0.0
+			b.crouch = false
+			b.node.rotation.y = _damp_angle(b.node.rotation.y, atan2(pos.x - b.node.position.x, pos.z - b.node.position.z), 4.0, dt)
 			continue
 		b.shoot_cd = maxf(0.0, b.shoot_cd - dt)
 		var see := _bot_see(b)
@@ -1821,7 +2065,7 @@ func _update_bots(dt: float) -> void:
 		allowed.append(cands[i][0])
 
 	for b in bots:
-		if b.state == "down":
+		if b.state == "down" or b.state == "idle":
 			continue
 		if b.state == "patrol":
 			b.crouch = false
@@ -1927,9 +2171,9 @@ static func zoom_t(z: float) -> float:
 
 func _camera_target(s: float) -> Vector3:
 	var follow := _follow_view()
-	var dist := lerpf(13.6 if follow else CAM_DIST, 4.9, s)
+	var dist := lerpf(_cam_dist() if follow else _cam_dist() * 1.21, 4.9, s)
 	var ahead := lerpf(3.15 if follow else 2.15, 2.05, s)
-	var tilt := lerpf(CAM_TILT, 0.2792527, s) + view_pitch * (1.0 - 0.6 * s)
+	var tilt := lerpf(_cam_tilt(), 0.2792527, s) + view_pitch * (1.0 - 0.6 * s)
 	var look_y := 1.48 * s
 	var fwd := Vector3(-sin(view_yaw), 0, -cos(view_yaw))
 	var right := Vector3(cos(view_yaw), 0, -sin(view_yaw))
@@ -1959,7 +2203,7 @@ func _update_camera(dt: float) -> void:
 	var hy := Vector2(d.x, d.z).length()
 	camera.position = cam_pos
 	camera.rotation = Vector3(-atan2(d.y, maxf(0.15, hy)) + kick_p * 0.25, atan2(d.x, d.z), 0)
-	var fov := (55.0 if _sprinting(_wish()) else 52.0) + 4.0 * s
+	var fov := _t("cam_fov") + (3.0 if _sprinting(_wish()) else 0.0) + 4.0 * s
 	camera.fov = _damp(camera.fov, fov, 6.0, dt)
 	fill_light.position = Vector3(pos.x, 3.2, pos.z)
 
@@ -1968,23 +2212,29 @@ func _update_camera(dt: float) -> void:
 
 func _process(delta: float) -> void:
 	var dt := minf(delta, 0.05)
+	if _save_wait >= 0.0:
+		_save_wait -= delta
+		if _save_wait < 0.0:
+			_save_settings()
 	if _game_active():
 		_update_look(dt)
 		_update_move(dt)
 		_update_cover()
 		_update_shoot(dt)
 		_update_bots(dt)
-		_update_mates(dt)
+		if not arena_mode:
+			_update_mates(dt)
 		_update_pickups(dt)
 		var ex := Vector2(pos.x - EXTRACT.x, pos.z - EXTRACT.z)
-		if hp > 0.0 and ex.length() <= EXTRACT_R:
+		if not arena_mode and hp > 0.0 and ex.length() <= EXTRACT_R:
 			_complete()
 		if hp < max_hp and _now() - last_hit > 4.0:
 			hp = minf(max_hp, hp + 12.0 * dt)
 	elif playing and not paused:
 		_update_bots(dt)
 	_pose_bots(dt)
-	_pose_mates(dt)
+	if not arena_mode:
+		_pose_mates(dt)
 	_update_player_visual(dt)
 	_update_camera(dt)
 	_update_fx(dt)
@@ -2030,4 +2280,7 @@ func _update_hud() -> void:
 	var kills: int = stats["kills"]
 	var dist := int(Vector2(pos.x - EXTRACT.x, pos.z - EXTRACT.z).length())
 	ui.hint_label.modulate.a = clampf(1.0 - (_now() - float(stats["start"]) - 12.0) / 2.0, 0.0, 1.0)
-	ui.obj_label.text = "Reach the north extract · %dm · Downs %d" % [dist, kills]
+	if arena_mode:
+		ui.obj_label.text = "TUNING ARENA %s · Enemy: %s · Downs %d" % [VERSION, "Active AI" if settings["enemy_active"] else "Static", kills]
+	else:
+		ui.obj_label.text = "Reach the north extract · %dm · Downs %d" % [dist, kills]
