@@ -1,7 +1,8 @@
 extends Node3D
 ## Pipe Hitters: twin-stick compound run. Everything is built in code.
 
-const RADIUS := 0.36
+const CHAR_RADIUS := 0.36
+const RADIUS := CHAR_RADIUS * Soldier.VISUAL_SCALE  # v1l: match 1.15x soldier scale
 const VAULT_MAX := 1.15
 const VAULT_MIN := 0.32
 const AIM_DEAD := 0.16
@@ -381,7 +382,7 @@ func _update_mates(dt: float) -> void:
 		elif dist > 0.35:
 			var sp := clampf(dist * 2.4, 0.0, _sprint() * 1.05)
 			var st := d / dist * minf(sp * dt, dist)
-			var c := _collide_xz(cur.x + st.x, cur.y + st.y, 0.34)
+			var c := _collide_xz(cur.x + st.x, cur.y + st.y, RADIUS * 0.94)
 			m.node.position.x = c.x
 			m.node.position.z = c.y
 		m.scan -= dt
@@ -654,7 +655,7 @@ func _load_settings() -> void:
 			settings[k] = cf.get_value("s", k, settings[k])
 		# v1j: the default camera moved closer (14.5 -> 11.2). Saved tuning keeps every custom
 		# value; only a camera still sitting on the old default follows the new one.
-		if not ["v1j", "v1k"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["cam_dist"]) - 14.5) < 0.01:
+		if not ["v1j", "v1k", "v1l"].has(cf.get_value("s", "tune_ver", "")) and absf(float(settings["cam_dist"]) - 14.5) < 0.01:
 			settings["cam_dist"] = 11.2
 		settings["tune_ver"] = TuneDefs.VERSION
 	for it in TuneDefs.all_items():
@@ -1511,7 +1512,7 @@ func _collide_chars(x: float, z: float, rad: float) -> Array:
 		var dx := x - ox
 		var dz := z - oz
 		var dist := sqrt(dx * dx + dz * dz)
-		var mn := rad + 0.36
+		var mn := rad + RADIUS
 		if dist >= mn:
 			continue
 		hit = true
@@ -2109,26 +2110,28 @@ func _bot_hit_test(o: Vector3, d: Vector3, max_d: float) -> Array:
 	for b in bots:
 		if b.state == "down":
 			continue
-		var c := Vector3(b.node.position.x, 0.55 if b.crouch else 0.9, b.node.position.z)
+		var vs := Soldier.VISUAL_SCALE
+		var c := Vector3(b.node.position.x, (0.55 if b.crouch else 0.9) * vs, b.node.position.z)
 		var t := (c - o).dot(d)
 		if t < 0.0 or t > bd:
 			continue
 		var q := o + d * t - c
-		var rad := 0.5 if b.crouch else 0.55
-		if q.x * q.x + q.z * q.z < rad * rad and absf(q.y) < (0.7 if b.crouch else 1.05):
+		var rad := (0.5 if b.crouch else 0.55) * vs
+		if q.x * q.x + q.z * q.z < rad * rad and absf(q.y) < (0.7 if b.crouch else 1.05) * vs:
 			best = b
 			bd = t
 	return [best, bd]
 
 
 func _player_hit_test(o: Vector3, d: Vector3, max_d: float) -> float:
-	var c := Vector3(pos.x, 0.55 if (crouch or stance == "slide") else 0.9, pos.z)
+	var vs := Soldier.VISUAL_SCALE
+	var c := Vector3(pos.x, (0.55 if (crouch or stance == "slide") else 0.9) * vs, pos.z)
 	var t := (c - o).dot(d)
 	if t < 0.0 or t > max_d:
 		return -1.0
 	var q := o + d * t - c
-	var rad := 0.42 if crouch else 0.5
-	if q.x * q.x + q.z * q.z < rad * rad and absf(q.y) < (0.7 if crouch else 1.05):
+	var rad := (0.42 if crouch else 0.5) * vs
+	if q.x * q.x + q.z * q.z < rad * rad and absf(q.y) < (0.7 if crouch else 1.05) * vs:
 		return t
 	return -1.0
 
@@ -2139,7 +2142,7 @@ func _hurt_bot(b: Bot) -> void:
 	b.hp -= 1
 	b.flash = maxf(_t("hit_flash") / 1000.0, 0.0)
 	if _tb("dmg_nums"):
-		ui.fx.add_number(b.node.position + Vector3(0, 2.7, 0), int(round(100.0 / maxf(b.max_hp, 1))))
+		ui.fx.add_number(b.node.position + Vector3(0, 2.7 * Soldier.VISUAL_SCALE, 0), int(round(100.0 / maxf(b.max_hp, 1))))
 	synth.play("hit", 0.7)
 	b.alert = maxf(b.alert, 3.0)
 	b.last_seen = Vector2(pos.x, pos.z)
@@ -2314,7 +2317,7 @@ func _move_bot(b: Bot, tx: float, tz: float, speed: float, dt: float) -> bool:
 	var dist := sqrt(dx * dx + dz * dz)
 	if dist < 0.22:
 		return true
-	var h := _collide_xz(b.node.position.x + dx / dist * speed * dt, b.node.position.z + dz / dist * speed * dt, 0.36)
+	var h := _collide_xz(b.node.position.x + dx / dist * speed * dt, b.node.position.z + dz / dist * speed * dt, RADIUS)
 	b.node.position.x = h.x
 	b.node.position.z = h.y
 	b.node.rotation.y = _damp_angle(b.node.rotation.y, atan2(dx, dz), 7.0, dt)

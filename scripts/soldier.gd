@@ -12,10 +12,10 @@ const SHOULDER_L := Vector3(0.25, 0.46, 0.02)
 const SHOULDER_R := Vector3(-0.25, 0.46, -0.02)
 const GUN_AIM_POS := Vector3(-0.13, 0.43, 0.34)
 ## v1i model: rifle butt in the right shoulder pocket, elbows bent (real-scale rifle).
-static var model_gun_aim := Vector3(-0.1, 0.3, 0.32)
+static var model_gun_aim := Vector3(-0.18, 0.36, 0.30)
 static var model_gun_ready := Vector3(-0.03, 0.2, 0.24)
 ## Support-hand point on the model rifle (rifle space), set on the rear of the handguard.
-static var model_support := Vector3(0, 0.005, 0.2)
+static var model_support := Vector3(0, 0.005, 0.16)
 const GUN_READY_POS := Vector3(-0.08, 0.29, 0.31)
 const GUN_READY_ROT := Vector3(0.5, 0.42, 0.18)
 const AIM_TWIST := -0.3
@@ -27,6 +27,8 @@ const LEG_LEN := 0.92
 const BODY_H := 1.9
 ## Run speed that the cadence slider refers to (locked walk speed).
 const RUN_REF := 6.3
+## v1l: player and enemies are 1.15x so they read on a phone. Hitboxes/collision follow this in main.gd.
+const VISUAL_SCALE := 1.15
 
 
 static func set_anim(d: Dictionary) -> void:
@@ -453,6 +455,7 @@ func setup(top: Color, bottom: Color, vest: Color, helmet: Color, gear: Color, s
 	for n in body.find_children("*", "MeshInstance3D", true, false):
 		_classic_meshes.append(n)
 	_build_model(top, bottom, vest, helmet, gear, skin, visor)
+	scale = Vector3.ONE * VISUAL_SCALE
 	pose(1.0, 0.0, 0.0, 0.0, 0.0, false, -1.0, false, false, -1.0)
 
 
@@ -798,11 +801,13 @@ func _build_model(top: Color, bottom: Color, vest: Color, helmet: Color, gear: C
 	_model_l2 = (_rest["forearm.L"] as Transform3D).origin.distance_to((_rest["hand.L"] as Transform3D).origin)
 	# Team materials (per soldier so the hit flash stays per soldier; meshes are shared).
 	var cols := {
-		"uniform_top": [top, 0.9], "uniform_pants": [bottom, 0.92], "gloves": [Color(0.13, 0.12, 0.11), 0.6],
+		"uniform_top": [top.lightened(0.06), 0.9], "uniform_pants": [bottom.darkened(0.22), 0.92],
+		"belt": [Color(0.09, 0.08, 0.07), 0.55], "collar": [top.darkened(0.06), 0.86], "cuffs": [top.darkened(0.06), 0.86],
+		"gloves": [Color(0.13, 0.12, 0.11), 0.6],
 		"boots": [Color(0.1, 0.09, 0.085), 0.5], "skin": [skin.darkened(0.3), 0.8], "hair": [HAIR_COL, 0.9], "eyes": [Color(0.05, 0.04, 0.035), 0.3], "sclera": [Color(0.78, 0.76, 0.72), 0.4],
 	}
 	var m_top := _mat(top, 0.9)
-	m_top.albedo_color = top.lightened(0.04)
+	m_top.albedo_color = top.lightened(0.06)
 	var mesh := model_mesh.mesh
 	for i in mesh.get_surface_count():
 		var src := mesh.surface_get_material(i)

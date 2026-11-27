@@ -6,6 +6,9 @@ func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
 	var out: String = args[0] if args.size() > 0 else "res://shots/v1i-model.png"
 	var mode: String = args[1] if args.size() > 1 else "aim"
+	var angle: String = args[2] if args.size() > 2 else (mode if mode in ["side", "head", "headside", "shoulder", "hands", "back", "top"] else "")
+	if angle and mode == angle:
+		mode = "aim"
 	DisplayServer.window_set_size(Vector2i(900, 1000) if mode != "grid" else Vector2i(1500, 700))
 	root.size = DisplayServer.window_get_size()
 	var env := Environment.new()
@@ -65,25 +68,25 @@ func _initialize() -> void:
 		sol.append([s, mode])
 		cam.fov = 32
 		var cp := Vector3(1.6, 1.55, 3.2)
-		if args.size() > 2 and args[2] == "side":
+		if angle == "side":
 			cp = Vector3(4.0, 1.3, 0.3)
-		elif args.size() > 2 and args[2] == "head":
+		elif angle == "head":
 			cp = Vector3(0.7, 1.82, 1.1)
 			cam.fov = 22
-		elif args.size() > 2 and args[2] == "headside":
+		elif angle == "headside":
 			cp = Vector3(1.4, 1.75, 0.0)
 			cam.fov = 22
-		elif args.size() > 2 and args[2] == "shoulder":
+		elif angle == "shoulder":
 			cp = Vector3(-1.2, 1.9, 1.3)
 			cam.fov = 28
-		elif args.size() > 2 and args[2] == "hands":
+		elif angle == "hands":
 			cp = Vector3(0.9, 1.45, 1.6)
 			cam.fov = 20
-		elif args.size() > 2 and args[2] == "back":
+		elif angle == "back":
 			cp = Vector3(-1.5, 1.6, -3.0)
-		elif args.size() > 2 and args[2] == "top":
+		elif angle == "top":
 			cp = Vector3(0.01, 4.5, 0.6)
-		cam.look_at_from_position(cp, Vector3(0.0, 1.75 if args.size() > 2 and (args[2].begins_with("head") or args[2] == "shoulder") else (1.3 if args.size() > 2 and args[2] == "hands" else 1.0), 0.0))
+		cam.look_at_from_position(cp, Vector3(0.0, 1.75 if (angle.begins_with("head") or angle == "shoulder") else (1.3 if angle == "hands" else 1.0), 0.0))
 	for f in 40:
 		for e in sol:
 			var s: Soldier = e[0]

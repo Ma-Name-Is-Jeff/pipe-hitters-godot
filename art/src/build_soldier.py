@@ -1,4 +1,4 @@
-"""Pipe Hitters soldier (v1k): CC0 MakeHuman base mesh, customized into our own soldier.
+"""Pipe Hitters soldier (v1l): CC0 MakeHuman base mesh, customized into our own soldier.
 
 Run:  /opt/blender/blender -b -P art/src/build_soldier.py
 In:   art/src/makehuman/base.obj + targets/*.target   (MakeHuman assets, CC0 1.0 - see art/LICENSES.md)
@@ -14,7 +14,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SRC = os.path.join(ROOT, "art", "src")
 MH = os.path.join(SRC, "makehuman")
 OUT = os.path.join(ROOT, "art", "models")
-TARGET_TRIS = 6300
+TARGET_TRIS = 5200
 HIP_JOINT_Y = 0.92      # driver leg length (thigh joint height)
 
 # Body shaping: MakeHuman macro + local targets (our own mix -> chunky young male soldier).
@@ -155,40 +155,7 @@ def main():
             if f.startswith(sd + "-"):
                 J[f] = stretch(J[f])
         J[sd + "-elbow"] = el + d1 * (ARM_STRETCH - 1) * L1
-    # 3) gloved hands: slightly larger, fingers curled into a grip
-    for sd, sg in (("l", 1), ("r", -1)):
-        wr = J[sd + "-hand"]
-        d = (J[sd + "-finger-3-1"] - wr).normalized()
-        lat = (J[sd + "-finger-2-1"] - J[sd + "-finger-5-1"]).normalized()
-        n = d.cross(lat).normalized()
-        if n.x * sg > 0:
-            n = -n
-        chains = {f: [J["%s-finger-%d-%d" % (sd, f, j)].copy() for j in range(1, 5)] for f in range(1, 6)}
-        ang = {1: (0.35, 0.45, 0.35), 2: (0.9, 1.2, 0.7), 3: (0.95, 1.25, 0.7), 4: (1.0, 1.25, 0.7), 5: (1.05, 1.2, 0.7)}
-        for i, g in enumerate(P):
-            if is_eye[i] or (g - wr).length > 0.25 or (g - wr).dot(d) < 0.0:
-                continue
-            best, bf, bk, bt = 1e9, None, 0, 0.0
-            for f, ch in chains.items():
-                for k in range(3):
-                    a_, b_ = ch[k], ch[k + 1]
-                    ab = b_ - a_
-                    t = max(-0.6, min(1.0, (g - a_).dot(ab) / ab.length_squared))
-                    dist = (a_ + ab * max(t, 0.0) - g).length
-                    if dist < best:
-                        best, bf, bk, bt = dist, f, k, t
-            g2 = wr + (g - wr) * HAND_SCALE
-            if bf is not None and not (bk == 0 and bt < 0.0):
-                ch = [wr + (c - wr) * HAND_SCALE for c in chains[bf]]
-                fd = (ch[1] - ch[0]).normalized()
-                ax = fd.cross(n).normalized()
-                for k in range(bk + 1):
-                    w = 1.0 if k < bk else min(1.0, max(0.0, bt * 4.0 if k == 0 else 1.0))
-                    R = Matrix.Rotation(ang[bf][k] * w, 3, ax)
-                    piv = ch[k]
-                    g2 = piv + R @ (g2 - piv)
-                    ch = [piv + R @ (c - piv) if j > k else c for j, c in enumerate(ch)]
-            P[i] = g2
+    # 3) hands are replaced later with clean procedural gloves (no MH thumb spikes).
     # 4) cartoony thickness: scale radially about the nearest bone axis
     SEG = [x for x in segments()]
     for i, g in enumerate(P):
@@ -244,8 +211,20 @@ def main():
         rs = [math.hypot(p.x - an.x, p.z - an.z) for i, p in enumerate(P) if not is_eye[i] and 0.2 < p.y < 0.24 and p.x * sg > 0.02]
         LEG_R[sd] = max(rs) if rs else 0.06
     globals()["LEG_R"] = LEG_R
-    # 5) boots: our own boot geometry replaces the bare feet (MH verts below the boot are removed)
-    bmesh.ops.delete(bm, geom=[v for v in bm.verts if bg(v.co).y < 0.13 and v not in eye_verts], context="VERTS")
+    # 5) drop MH feet and hands — replaced with our own boots and gloves.
+    kill = [v for v in bm.verts if v not in eye_verts and bg(v.co).y < 0.13]
+    for sd in ("l", "r"):
+        d = (WR[sd] - EL[sd]).normalized()
+        cut = WR[sd] - d * 0.02
+        for v in bm.verts:
+            if v in eye_verts:
+                continue
+            g = bg(v.co)
+            if (g - cut).dot(d) > 0 and (g - WR[sd]).length < 0.3:
+                kill.append(v)
+    bmesh.ops.delete(bm, geom=list(set(kill)), context="VERTS")
+    bmesh.ops.holes_fill(bm, edges=[e for e in bm.edges if e.is_boundary], sides=0)
+    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
     bm.normal_update()
     # 6) clothing volume
     for v in bm.verts:
@@ -278,6 +257,8 @@ def main():
             keep.add([v.index], 0.75, "REPLACE")
         elif g.y > J["l-clavicle"].y - 0.12:
             keep.add([v.index], 0.35, "REPLACE")
+        elif 0.35 < g.y < WAIST_Y + 0.02 and abs(g.x) > 0.04:
+            keep.add([v.index], 0.4, "REPLACE")   # thighs: less faceting
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
     bpy.ops.mesh.quads_convert_to_tris()
@@ -291,34 +272,86 @@ def main():
     dec.vertex_group_factor = 1.0
     bpy.ops.object.modifier_apply(modifier="Decimate")
     body.vertex_groups.remove(body.vertex_groups["keep_detail"])
-    boots = build_boots(LEG_R)
+    # Light smooth on the body (not the face) to knock down thigh faceting.
+    smg = body.vertex_groups.new(name="smooth_body")
+    for v in body.data.vertices:
+        g = bg(v.co)
+        if g.y < J["neck"].y - 0.04:
+            smg.add([v.index], 1.0 if 0.3 < g.y < WAIST_Y + 0.08 else 0.45, "REPLACE")
+    sm = body.modifiers.new("Smooth", "SMOOTH")
+    sm.factor = 0.45
+    sm.iterations = 5
+    sm.vertex_group = "smooth_body"
+    bpy.ops.object.modifier_apply(modifier="Smooth")
+    body.vertex_groups.remove(body.vertex_groups["smooth_body"])
+    extras = [build_boots(LEG_R), build_gloves(), build_kit(body)]
     bpy.ops.object.select_all(action="DESELECT")
-    boots.select_set(True)
+    for o in extras:
+        o.select_set(True)
     body.select_set(True)
     bpy.context.view_layer.objects.active = body
     bpy.ops.object.join()
+    tris = sum(len(p.vertices) - 2 for p in body.data.polygons)
+    print("PRE-SEAM tris", tris)
+    # Do not decimate belt/collar/cuffs/boots/gloves with the body. A joint
+    # decimate welds the proud belt into the torso and leaves a jagged
+    # shirt/pants bite. If we are over budget, shrink only untagged body verts,
+    # and do it BEFORE clean_seams so the waist loop stays a clean cut.
+    kit_names = {"is_belt", "is_collar", "is_cuffs", "is_gloves", "is_boots"}
+    SEAM_ROOM = 1600
+    if tris > 10000 - SEAM_ROOM:
+        keep = body.vertex_groups.new(name="keep_kit")
+        for v in body.data.vertices:
+            if any(body.vertex_groups[ge.group].name in kit_names and ge.weight > 0.4 for ge in v.groups):
+                keep.add([v.index], 1.0, "REPLACE")
+            else:
+                g = bg(v.co)
+                if g.y > COLLAR_Y - 0.04:
+                    keep.add([v.index], 0.7, "REPLACE")
+        d = body.modifiers.new("DecBody", "DECIMATE")
+        d.ratio = min(1.0, (8200) / tris)
+        d.vertex_group = "keep_kit"
+        d.invert_vertex_group = True
+        d.vertex_group_factor = 1.0
+        bpy.ops.object.modifier_apply(modifier="DecBody")
+        if "keep_kit" in [g.name for g in body.vertex_groups]:
+            body.vertex_groups.remove(body.vertex_groups["keep_kit"])
+        print("POST-DECBODY tris", sum(len(p.vertices) - 2 for p in body.data.polygons))
     clean_seams(body)
     for p in body.data.polygons:
         p.use_smooth = True
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    add_clean_eyes(body)
+    # Face materials use is_* groups, which automatic weights will replace, so assign first.
+    assign_materials(body, set())
+    for g in list(body.vertex_groups):
+        body.vertex_groups.remove(g)
     rig = build_armature()
     bpy.ops.object.select_all(action="DESELECT")
     body.select_set(True)
     rig.select_set(True)
     bpy.context.view_layer.objects.active = rig
     bpy.ops.object.parent_set(type="ARMATURE_AUTO")
-    # eyeballs ride the head bone only
-    eyeset = set(v.index for v in body.data.vertices if any(g.group == body.vertex_groups["eyeball"].index for g in v.groups))
-    for g_ in body.vertex_groups:
-        if g_.name not in ("head", "eyeball"):
-            g_.remove(list(eyeset))
-    body.vertex_groups["head"].add(list(eyeset), 1.0, "REPLACE")
-    body.vertex_groups.remove(body.vertex_groups["eyeball"])
+    # Pin the irises to the head bone.
+    iris = [v.index for v in body.data.vertices
+            if min((bg(v.co) - J["l-eye"]).length, (bg(v.co) - J["r-eye"]).length) < 0.02]
+    if "head" in [g.name for g in body.vertex_groups] and iris:
+        for g_ in body.vertex_groups:
+            if g_.name != "head":
+                g_.remove(iris)
+        body.vertex_groups["head"].add(iris, 1.0, "REPLACE")
     smooth_weights(body)
     empty = [v.index for v in body.data.vertices if not v.groups]
-    print("verts without weights:", len(empty))
+    print("verts without weights:", len(empty), "of", len(body.data.vertices))
+    if empty:
+        print("filling", len(empty), "unweighted verts by nearest bone")
+        fallback_weights(body, rig, only=empty)
+        empty = [v.index for v in body.data.vertices if not v.groups]
     if empty:
         body.vertex_groups["chest"].add(empty, 1.0, "REPLACE")
-    assign_materials(body, eyeset)
     body.data.validate()
     print("SOLDIER tris:", sum(len(p.vertices) - 2 for p in body.data.polygons), "verts:", len(body.data.vertices))
     print("JOINTS", {k: tuple(round(c, 3) for c in J[k]) for k in ("pelvis", "neck", "head", "l-shoulder", "l-elbow", "l-hand", "l-upper-leg", "l-knee", "l-ankle")})
@@ -426,11 +459,11 @@ def build_boots(P_leg_r):
     PARTS.clear()
     for sd in ("l", "r"):
         an = J[sd + "-ankle"]
-        r = P_leg_r[sd] + 0.02
-        _loft((an.x, BOOT_TOP - 0.004, an.z - 0.005), (an.x, 0.07, an.z), [(0, r, r * 1.04, 0), (1, r + 0.006, r * 1.08, 0)])
-        toe_z = J[sd + "-foot-2"].z + 0.04
-        _loft((an.x, 0.062, an.z - 0.085), (an.x + (0.01 if sd == "l" else -0.01), 0.058, toe_z),
-              [(0, 0.07, 0.062, 0), (0.55, 0.077, 0.064, 0), (1, 0.066, 0.052, 0)], side_hint=(1, 0, 0))
+        r = P_leg_r[sd] + 0.01
+        _loft((an.x, BOOT_TOP - 0.004, an.z - 0.004), (an.x, 0.055, an.z), [(0, r, r * 1.03, 0), (1, r + 0.004, r * 1.06, 0)])
+        toe_z = J[sd + "-foot-2"].z + 0.016
+        _loft((an.x, 0.05, an.z - 0.068), (an.x + (0.008 if sd == "l" else -0.008), 0.046, toe_z),
+              [(0, 0.056, 0.05, 0), (0.55, 0.062, 0.051, 0), (1, 0.053, 0.042, 0)], side_hint=(1, 0, 0))
     bm = bmesh.new()
     for part in PARTS:
         tmp = bpy.data.meshes.new("tmp")
@@ -457,11 +490,222 @@ def build_boots(P_leg_r):
             v.co.z = max(v.co.z, 0.0) * 0.3
     tris = sum(len(p.vertices) - 2 for p in ob.data.polygons)
     d = ob.modifiers.new("Dec", "DECIMATE")
-    d.ratio = min(1.0, 1100 / max(tris, 1))
+    d.ratio = min(1.0, 800 / max(tris, 1))
     bpy.ops.object.modifier_apply(modifier="Dec")
     for p in ob.data.polygons:
         p.use_smooth = True
+    _tag(ob, "is_boots")
     return ob
+
+
+
+def _parts_to_object(name, voxel=0.006, smooth_iter=6, decimate=800, flatten_soles=False):
+    bm = bmesh.new()
+    for part in PARTS:
+        tmp = bpy.data.meshes.new("tmp")
+        part.to_mesh(tmp)
+        bm.from_mesh(tmp)
+        bpy.data.meshes.remove(tmp)
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    PARTS.clear()
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.collection.objects.link(ob)
+    bpy.ops.object.select_all(action="DESELECT")
+    ob.select_set(True)
+    bpy.context.view_layer.objects.active = ob
+    if voxel:
+        m = ob.modifiers.new("Remesh", "REMESH")
+        m.mode = "VOXEL"
+        m.voxel_size = voxel
+        bpy.ops.object.modifier_apply(modifier="Remesh")
+    if smooth_iter:
+        sm = ob.modifiers.new("Smooth", "SMOOTH")
+        sm.factor = 0.5
+        sm.iterations = smooth_iter
+        bpy.ops.object.modifier_apply(modifier="Smooth")
+    if flatten_soles:
+        for v in ob.data.vertices:
+            if v.co.z < 0.015:
+                v.co.z = max(v.co.z, 0.0) * 0.3
+    tris = sum(len(p.vertices) - 2 for p in ob.data.polygons)
+    if decimate and tris > decimate:
+        d = ob.modifiers.new("Dec", "DECIMATE")
+        d.ratio = min(1.0, decimate / max(tris, 1))
+        bpy.ops.object.modifier_apply(modifier="Dec")
+    for p in ob.data.polygons:
+        p.use_smooth = True
+    return ob
+
+
+def build_gloves():
+    """Clean original tactical gloves: palm, four curled fingers, a tucked thumb. No spikes."""
+    PARTS.clear()
+    for sd, sg in (("l", 1), ("r", -1)):
+        wr = WR[sd]
+        d = (wr - EL[sd]).normalized()          # along the forearm, out to the fingers
+        # Palm side axis: toward the body (inward) is a stable 'thumb side' for A-pose.
+        inward = Vector((-sg, 0, 0))
+        inward = (inward - d * inward.dot(d)).normalized()
+        # Palm normal: roughly down / slightly forward so a grip curl closes the hand.
+        n = d.cross(inward).normalized()
+        if n.y > 0:
+            n = -n
+        lat = n.cross(d).normalized()           # across the palm, thumb is +lat * sg? thumb is inward
+        thumb_side = inward
+        # Palm
+        palm0 = wr + d * 0.01
+        palm1 = wr + d * 0.075
+        _loft(tuple(palm0), tuple(palm1), [(0, 0.038, 0.026, 0), (1, 0.042, 0.028, 0)], seg=14, rings=8, side_hint=tuple(thumb_side))
+        # Four fingers, slightly curled into a grip (along -n).
+        spreads = [-0.028, -0.01, 0.008, 0.026]
+        lengths = [0.055, 0.062, 0.058, 0.048]
+        for sp, ln in zip(spreads, lengths):
+            base = palm1 + thumb_side * sp + n * 0.004
+            mid = base + d * (ln * 0.5) - n * 0.016
+            tip = mid + d * (ln * 0.28) - n * 0.028
+            _capsule(tuple(base), tuple(mid), 0.011, 0.01)
+            _capsule(tuple(mid), tuple(tip), 0.01, 0.008)
+        # Thumb: short, opposed across the palm, tucked — never a downward spike.
+        t0 = palm0 + thumb_side * 0.03 + n * 0.006 + d * 0.012
+        t1 = t0 + thumb_side * 0.01 + d * 0.028 - n * 0.008
+        t2 = t1 + d * 0.018 - n * 0.01 + thumb_side * 0.004
+        _capsule(tuple(t0), tuple(t1), 0.012, 0.011)
+        _capsule(tuple(t1), tuple(t2), 0.011, 0.009)
+    ob = _parts_to_object("Gloves", voxel=0.005, smooth_iter=5, decimate=900)
+    _tag(ob, "is_gloves")
+    return ob
+
+
+def _tag(ob, name):
+    g = ob.vertex_groups.new(name=name)
+    g.add([v.index for v in ob.data.vertices], 1.0, "REPLACE")
+    return ob
+
+
+def _add_torus(center, major, minor, axis=(0, 1, 0), scale_xz=(1.0, 1.0), major_seg=20, minor_seg=8):
+    bpy.ops.mesh.primitive_torus_add(
+        major_radius=major, minor_radius=minor,
+        major_segments=major_seg, minor_segments=minor_seg,
+        location=gv(center))
+    ob = bpy.context.active_object
+    z = (gv(Vector(center) + Vector(axis)) - gv(center)).normalized()
+    ob.rotation_euler = Vector((0, 0, 1)).rotation_difference(z).to_euler()
+    # Flatten in the torus plane: after a Z-aligned torus, X and Y are the ring; we want Godot X/Z.
+    # Apply rotation first so we can scale in object space along residual axes when axis is Y (default).
+    if axis[0] == 0 and axis[1] == 1 and axis[2] == 0:
+        ob.scale = (scale_xz[0], scale_xz[1], 1.0)
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+    return ob
+
+
+def _ring_fit(body, y, ytol=0.02, pred=None):
+    """Outside extents of the body at a given height (Godot space).
+
+    Returns (x_half, z_forward, z_back) so a belt can be centred on a
+    belly-heavier torso instead of floating off the back.
+    """
+    xs, zf, zb = [], [], []
+    for v in body.data.vertices:
+        g = bg(v.co)
+        if abs(g.y - y) > ytol:
+            continue
+        if pred and not pred(g):
+            continue
+        xs.append(abs(g.x))
+        (zf if g.z >= 0.0 else zb).append(abs(g.z))
+    def pct(a, p):
+        if not a:
+            return 0.0
+        a = sorted(a)
+        return a[min(len(a) - 1, int(round((len(a) - 1) * p)))]
+    return pct(xs, 0.9), pct(zf, 0.9), pct(zb, 0.9)
+
+
+def build_kit(body):
+    """Belt, crew-neck collar, rolled sleeve cuffs, and a couple of pocket shapes — so the uniform is not a onesie."""
+    obs = []
+    # Belt: fit a tight torus to the waist (slightly proud), plus a simple buckle.
+    pred_w = lambda g: abs(g.x) < 0.28 and not _on_arm(g) and not _past_wrist(g)
+    bx, bz_f, bz_b = _ring_fit(body, WAIST_Y, 0.02, pred_w)
+    bmin = 0.016
+    proud = bmin * 0.12
+    bz = 0.5 * (bz_f + bz_b) + proud
+    bcz = 0.5 * (bz_f - bz_b)  # shift forward if the belly is bigger than the back
+    bmaj = max(0.12, (bx + proud + bz) * 0.5)
+    bsz = ((bx + proud) / bmaj, bz / bmaj)
+    print("BELT FIT", "x,zf,zb", (round(bx, 3), round(bz_f, 3), round(bz_b, 3)),
+          "cz", round(bcz, 3), "maj", round(bmaj, 3), "scale", tuple(round(s, 3) for s in bsz))
+    belt = _add_torus((0, WAIST_Y, bcz), bmaj, bmin, scale_xz=bsz)
+    _tag(belt, "is_belt")
+    obs.append(belt)
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=gv((0, WAIST_Y, bcz + bz + 0.004)))
+    buckle = bpy.context.active_object
+    buckle.scale = (0.03, 0.012, 0.022)
+    bpy.ops.object.transform_apply(scale=True)
+    _tag(buckle, "is_belt")
+    obs.append(buckle)
+    # Crew-neck collar: fit a tight ring to the neck, slightly lower in front.
+    cx, cz_f, cz_b = _ring_fit(body, COLLAR_Y + 0.006, 0.015, lambda g: abs(g.x) < 0.16 and not _on_arm(g))
+    cmin = 0.011
+    cproud = cmin * 0.2
+    cz = 0.5 * (cz_f + cz_b) + cproud
+    ccz = 0.5 * (cz_f - cz_b)
+    cmaj = max(0.06, (cx + cproud + cz) * 0.5)
+    csz = ((cx + cproud) / cmaj, cz / cmaj)
+    print("COLLAR FIT", "x,zf,zb", (round(cx, 3), round(cz_f, 3), round(cz_b, 3)),
+          "cz", round(ccz, 3), "maj", round(cmaj, 3), "scale", tuple(round(s, 3) for s in csz))
+    col = _add_torus((0, COLLAR_Y + 0.006, ccz), cmaj, cmin, scale_xz=csz)
+    for v in col.data.vertices:
+        g = bg(v.co)
+        if g.z > 0.02:
+            v.co.z -= 0.016 * min(1.0, (g.z - 0.02) / 0.06)  # blender z = godot y, dip the front
+    _tag(col, "is_collar")
+    obs.append(col)
+    # Rolled sleeve cuffs just above each wrist.
+    for sd in ("l", "r"):
+        d = (WR[sd] - EL[sd]).normalized()
+        roll = _add_torus(tuple(WR[sd] - d * 0.055), 0.05, 0.014, axis=tuple(d))
+        cuff = _add_torus(tuple(WR[sd] - d * 0.025), 0.048, 0.01, axis=tuple(d))
+        _tag(roll, "is_cuffs")
+        _tag(cuff, "is_cuffs")
+        obs.extend([roll, cuff])
+    # Chest and thigh pockets: thin rounded boxes, slightly proud.
+    for s_ in (1, -1):
+        bpy.ops.mesh.primitive_cube_add(size=1.0, location=gv((0.07 * s_, J["spine-1"].y - 0.02, 0.145)))
+        pock = bpy.context.active_object
+        pock.scale = (0.032, 0.008, 0.038)
+        bpy.ops.object.transform_apply(scale=True)
+        bev = pock.modifiers.new("b", "BEVEL")
+        bev.width = 0.004
+        bev.segments = 2
+        bpy.ops.object.modifier_apply(modifier="b")
+        obs.append(pock)
+        bpy.ops.mesh.primitive_cube_add(size=1.0, location=gv((0.1 * s_, 0.62, 0.11)))
+        tp = bpy.context.active_object
+        tp.scale = (0.032, 0.01, 0.04)
+        bpy.ops.object.transform_apply(scale=True)
+        bev = tp.modifiers.new("b", "BEVEL")
+        bev.width = 0.004
+        bev.segments = 2
+        bpy.ops.object.modifier_apply(modifier="b")
+        obs.append(tp)
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in obs:
+        bpy.context.view_layer.objects.active = o
+        o.select_set(True)
+        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+        o.select_set(False)
+    for o in obs:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = obs[0]
+    bpy.ops.object.join()
+    kit = bpy.context.active_object
+    kit.name = "Kit"
+    for p in kit.data.polygons:
+        p.use_smooth = True
+    return kit
 
 
 def _hair_cut(g):
@@ -478,34 +722,83 @@ def _past_wrist(g):
     return False
 
 
+def neckline_y(g):
+    """Crew neck: dips in front, stays higher at the sides and back."""
+    fwd = g.z - J["neck"].z
+    return COLLAR_Y - 0.04 * max(0.0, fwd / 0.12) + 0.008 * max(0.0, -fwd / 0.12)
+
+
 def region(g):
+    # Belt/collar/cuffs are assigned only from is_* groups on the kit meshes.
+    # Painting them onto body faces by radius made a jagged shirt/pants bite.
     if g.y < BOOT_TOP:
         return "boots"
     if _past_wrist(g):
         return "gloves"
-    if g.y > COLLAR_Y and (g.y > J["head"].y or abs(g.x) < 0.075 or math.hypot(g.x, g.z - J["neck"].z) < 0.1):
+    # Skin/shirt follows the collar cut plane so the neckline stays a clean loop.
+    if g.y > COLLAR_Y and (g.y > J["head"].y or abs(g.x) < 0.085 or math.hypot(g.x, g.z - J["neck"].z) < 0.13):
         if g.y > _hair_cut(g) and not (abs(g.x) > 0.06 and g.y < EYE_Y + 0.025 and abs(g.z - J["head"].z) < 0.05):
             return "hair"
         return "skin"
-    if g.y < WAIST_Y and abs(g.x) < 0.3:
+    if g.y < WAIST_Y and abs(g.x) < 0.35:
         return "pants"
     return "top"
 
 
-def clean_seams(body):
-    bm = bmesh.new()
-    bm.from_mesh(body.data)
-    cuts = [(gv((0, WAIST_Y, 0)), Vector((0, 0, 1))), (gv((0, BOOT_TOP, 0)), Vector((0, 0, 1))),
-            (gv((0, COLLAR_Y, 0)), Vector((0, 0, 1)))]
+def _on_arm(g):
+    for sd in ("l", "r"):
+        if (g - EL[sd]).length < 0.12 or (g - WR[sd]).length < 0.16:
+            return True
+    return False
+
+
+def _on_cuff(g):
     for sd in ("l", "r"):
         d = (WR[sd] - EL[sd]).normalized()
-        cuts.append((gv(WR[sd] - d * 0.01), gv(d) - gv((0, 0, 0))))
+        t = (g - (WR[sd] - d * 0.055)).dot(d)
+        rad = (g - (WR[sd] - d * 0.055) - d * t).length
+        if -0.03 < t < 0.04 and 0.04 < rad < 0.09:
+            return True
+    return False
+
+
+def _seam_geom(bm, pred):
+    verts = [v for v in bm.verts if pred(bg(v.co))]
+    vset = set(verts)
+    edges = [e for e in bm.edges if e.verts[0] in vset or e.verts[1] in vset]
+    faces = [f for f in bm.faces if any(v in vset for v in f.verts)]
+    return verts + edges + faces
+
+
+def clean_seams(body):
+    """Cut clean material loops on the body only. Do not bisect the whole
+    figure — a waist plane also slices the gloves (hands sit near WAIST_Y
+    in bind pose) and inflates the tri count."""
+    bm = bmesh.new()
+    bm.from_mesh(body.data)
+    cuts = [
+        (gv((0, WAIST_Y, 0)), Vector((0, 0, 1)),
+         lambda g: abs(g.y - WAIST_Y) < 0.06 and abs(g.x) < 0.28 and not _on_arm(g) and not _past_wrist(g)),
+        (gv((0, BOOT_TOP, 0)), Vector((0, 0, 1)),
+         lambda g: abs(g.y - BOOT_TOP) < 0.05 and abs(g.x) > 0.04 and g.y < 0.4),
+        (gv((0, COLLAR_Y, 0)), Vector((0, 0, 1)),
+         lambda g: abs(g.y - COLLAR_Y) < 0.05 and abs(g.x) < 0.16 and not _on_arm(g)),
+    ]
+    for sd in ("l", "r"):
+        d = (WR[sd] - EL[sd]).normalized()
+        side = 1 if sd == "l" else -1
+        cuts.append((gv(WR[sd] - d * 0.01), gv(d) - gv((0, 0, 0)),
+                     lambda g, d=d, wr=WR[sd], side=side: (g.x * side > 0.1) and (g - wr).length < 0.22))
+        cuts.append((gv(WR[sd] - d * 0.07), gv(d) - gv((0, 0, 0)),
+                     lambda g, d=d, wr=WR[sd], side=side: (g.x * side > 0.1) and (g - wr).length < 0.22))
     hf, hb, zf, zb = HAIR
-    n = Vector((0, 1.0, -(hf - hb) / (zf - zb))).normalized()   # godot-space plane normal (y up, tilted)
-    cuts.append((gv((0, hb, zb)), gv(n) - gv((0, 0, 0))))
-    for co, no in cuts:
-        geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
-        bmesh.ops.bisect_plane(bm, geom=geom, plane_co=co, plane_no=no.normalized())
+    n = Vector((0, 1.0, -(hf - hb) / (zf - zb))).normalized()
+    cuts.append((gv((0, hb, zb)), gv(n) - gv((0, 0, 0)),
+                 lambda g: g.y > J["neck"].y - 0.02 and abs(g.x) < 0.16))
+    for co, no, pred in cuts:
+        geom = _seam_geom(bm, pred)
+        if geom:
+            bmesh.ops.bisect_plane(bm, geom=geom, plane_co=co, plane_no=no.normalized())
     bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
     bm.to_mesh(body.data)
     bm.free()
@@ -587,10 +880,67 @@ def mat(name, col, rough, metal=0.0):
     return m
 
 
+
+def fallback_weights(body, rig, only=None):
+    """Nearest-bone weights if heat weighting fails (still blended to 2 nearest)."""
+    only = set(only) if only is not None else None
+    segs = []
+    names = [g.name for g in body.vertex_groups]
+    for b in rig.data.bones:
+        segs.append((b.name, b.head_local.copy(), b.tail_local.copy()))
+        if b.name not in names:
+            body.vertex_groups.new(name=b.name)
+    for v in body.data.vertices:
+        if only is not None and v.index not in only:
+            continue
+        dists = []
+        for name, a, t in segs:
+            ab = t - a
+            ln = ab.length_squared or 1e-8
+            u = max(0.0, min(1.0, (v.co - a).dot(ab) / ln))
+            dists.append(( (v.co - (a + ab * u)).length, name ))
+        dists.sort()
+        d0, d1 = dists[0][0], dists[1][0]
+        w0 = 1.0 / max(d0, 0.01)
+        w1 = 1.0 / max(d1, 0.01)
+        s = w0 + w1
+        # clear and assign
+        for g in list(v.groups):
+            body.vertex_groups[g.group].remove([v.index])
+        body.vertex_groups[dists[0][1]].add([v.index], w0 / s, "REPLACE")
+        body.vertex_groups[dists[1][1]].add([v.index], w1 / s, "REPLACE")
+
+
+
+
+def add_clean_eyes(body):
+    """Two simple dark irises, slightly proud of the lids. Tagged is_eyes, weighted later to head."""
+    obs = []
+    for sd in ("l", "r"):
+        c = J[sd + "-eye"] + Vector((0, 0, 0.011))
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=14, ring_count=10, radius=0.014, location=gv(tuple(c)))
+        e = bpy.context.active_object
+        e.scale = (0.9, 0.5, 0.72)
+        bpy.ops.object.transform_apply(scale=True)
+        for p in e.data.polygons:
+            p.use_smooth = True
+        _tag(e, "is_eyes")
+        obs.append(e)
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in obs:
+        o.select_set(True)
+    body.select_set(True)
+    bpy.context.view_layer.objects.active = body
+    bpy.ops.object.join()
+
+
 def assign_materials(body, eyeset):
     M = {
-        "top": mat("uniform_top", (0.2, 0.21, 0.19), 0.88),
-        "pants": mat("uniform_pants", (0.16, 0.17, 0.15), 0.9),
+        "top": mat("uniform_top", (0.26, 0.29, 0.27), 0.88),
+        "pants": mat("uniform_pants", (0.11, 0.125, 0.11), 0.9),
+        "belt": mat("belt", (0.07, 0.06, 0.05), 0.55),
+        "collar": mat("collar", (0.2, 0.22, 0.2), 0.86),
+        "cuffs": mat("cuffs", (0.2, 0.22, 0.2), 0.86),
         "gloves": mat("gloves", (0.08, 0.08, 0.08), 0.65),
         "boots": mat("boots", (0.06, 0.06, 0.06), 0.55),
         "skin": mat("skin", (0.62, 0.47, 0.37), 0.8),
@@ -602,15 +952,36 @@ def assign_materials(body, eyeset):
     for k in order:
         body.data.materials.append(M[k])
     me = body.data
-    head_c = None
+    vg = {g.index: g.name for g in body.vertex_groups}
     for p in me.polygons:
         g = bg(p.center)
-        if all(vi in eyeset for vi in p.vertices):
-            n = bg(p.normal) if False else Vector((p.normal.x, p.normal.z, -p.normal.y))
-            k = "eyes" if n.z > 0.86 else "sclera"
+        names = set()
+        for vi in p.vertices:
+            for ge in me.vertices[vi].groups:
+                if ge.weight > 0.4:
+                    names.add(vg.get(ge.group, ""))
+        if "is_eyes" in names:
+            k = "eyes"
+        elif "is_boots" in names:
+            k = "boots"
+        elif "is_gloves" in names:
+            k = "gloves"
+        elif "is_belt" in names:
+            k = "belt"
+        elif "is_collar" in names:
+            k = "collar"
+        elif "is_cuffs" in names:
+            k = "cuffs"
         else:
             k = region(g)
+            if k == "sclera":
+                k = "skin"
         p.material_index = order.index(k)
+    counts = {}
+    for p in me.polygons:
+        n = order[p.material_index]
+        counts[n] = counts.get(n, 0) + 1
+    print("MAT FACES", counts)
 
 
 main()
